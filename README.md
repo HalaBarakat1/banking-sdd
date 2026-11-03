@@ -7,7 +7,7 @@ built with **Spec-Driven Development** (GitHub Spec Kit): every line of code tra
 specification.
 
 The full homework report, with the code walkthrough, fault-scenario runs and reflection, is in
-[docs/Report.pdf](docs/Report.pdf) ([Word version](docs/Report.docx)).
+[docs/Report.pdf](docs/Report.pdf).
 
 | | |
 |---|---|
@@ -64,7 +64,7 @@ src/main/java/ds/banking/                production code
   protocol/  server/{decision,store,http,fault,log}/  client/  cli/
 tests/java/ds/banking/                   tests: unit/ contract/ integration/ process/ soak/ support/
 docs/quickstart-run.txt                  transcript of the manual demo run (T058)
-docs/Report.pdf, docs/Report.docx        homework report
+docs/Report.pdf                          homework report
 ```
 
 ## Build and test
