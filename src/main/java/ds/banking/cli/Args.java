@@ -8,8 +8,9 @@ import java.util.Set;
 
 /**
  * Minimal {@code --name value} parser shared by the server and client sub-commands
- * (contracts/client-cli.md). Options come first; everything from the first non-option on is
- * positional. Unknown options and malformed numbers are a {@link UsageException}.
+ * (contracts/client-cli.md): the retry limit flags (FR-022) and account seeding (FR-031). Options come
+ * first; everything from the first non-option on is positional. Unknown options and malformed numbers
+ * are a {@link UsageException}.
  */
 public final class Args {
 

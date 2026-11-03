@@ -9,7 +9,8 @@ import java.io.OutputStream;
 
 /**
  * Small helpers shared by the HTTP handlers: read a bounded body, write a JSON response
- * (contracts/http-api.md: every body is {@code application/json; charset=utf-8}).
+ * (contracts/http-api.md: every body is {@code application/json; charset=utf-8}; FR-002). The body limit
+ * makes an oversized request {@code INVALID_REQUEST} before any parsing (FR-012).
  */
 public final class HttpIo {
 

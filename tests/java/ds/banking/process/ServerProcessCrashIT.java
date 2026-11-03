@@ -116,7 +116,7 @@ class ServerProcessCrashIT {
     }
 
     @Test
-    @DisplayName("SC-004 / NFR-001 / EC-011: after kill -9 under load and a restart, every answered decision is still there and replays unchanged")
+    @DisplayName("SC-004 / NFR-001 / EC-011 / FR-013: after kill -9 under load and a restart, every answered decision is still there and replays unchanged")
     void answeredDecisionsSurviveKill() throws Exception {
         Path jar = launcherJar();
         Path db = dir.resolve("bank.db");
