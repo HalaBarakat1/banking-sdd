@@ -40,6 +40,14 @@ configurable fault injector covering four failure scenarios."
   original. Every decided key gets its own transaction record, so any copy of any key always gets the
   original answer.
 
+### Amendment 2026-11-03 (found while planning)
+
+- FR-011 conflicted with User Story 5: a late debit copy of a cancelled key is a replay of `CANCELLED`,
+  not a `KEY_CONFLICT`. FR-011 now limits conflicts to a debit with a different amount.
+- FR-026 conflicted with FR-027: resending every unresolved entry on start would re-send a debit the
+  user is about to cancel. FR-026 now excludes that entry.
+- FR-003 now names the two cancel-only outcomes so every outcome is listed in one place.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Debit executes exactly once despite retries (Priority: P1)
@@ -212,7 +220,8 @@ the balance is unchanged.
   amount and the balance right after that debit.
 - **FR-003**: The outcomes of a debit MUST be exactly: `EXECUTED`, `INSUFFICIENT_FUNDS`, `CANCELLED`
   (key was burnt by a cancel), `STALE_KEY`, `KEY_CONFLICT`, `INVALID_REQUEST`, `UNKNOWN_ACCOUNT`, and
-  `UNAVAILABLE` (server temporarily unable to process).
+  `UNAVAILABLE` (server temporarily unable to process). A cancel may additionally answer
+  `ALREADY_EXECUTED` or `ALREADY_REJECTED` (FR-017).
 - **FR-004**: Outcomes MUST be classified for the client: `UNAVAILABLE` and "no answer" are
   **retryable**; all other outcomes are **final**.
 
@@ -231,8 +240,9 @@ the balance is unchanged.
   server MUST reply `STALE_KEY` and MUST NOT move money. Such a key can never execute later.
 - **FR-010**: The server MUST decide using stored state only; the `is_retry` flag MUST NOT change the
   decision and is used for logging and diagnostics.
-- **FR-011**: When a copy of a decided key carries a different amount or operation than the record, the
-  server MUST reply `KEY_CONFLICT` and MUST NOT change anything.
+- **FR-011**: When a debit copy of a key decided by a debit carries a different amount than the record,
+  the server MUST reply `KEY_CONFLICT` and MUST NOT change anything. A debit copy of a key burnt by a
+  cancel is not a conflict: it replays `CANCELLED` (FR-008, User Story 5).
 - **FR-012**: Invalid requests (EC-004) and unknown accounts (EC-005) MUST be rejected without consuming
   a key and without changing anything.
 - **FR-013**: The server MUST send a success answer only after the decision is durably saved.
@@ -268,7 +278,7 @@ the balance is unchanged.
 - **FR-025**: The client MUST refuse to start a new transaction on an account that has an unresolved
   (`PENDING` or `UNKNOWN`) transaction (EC-009).
 - **FR-026**: On start, the client MUST resend every unresolved transaction as a retry, using its stored
-  key, operation and amount.
+  key, operation and amount, except an entry the user started the client to cancel (FR-027).
 - **FR-027**: Once the client asks to cancel an unresolved debit, the recorded operation for that key
   MUST become cancel, and the client MUST never send that debit again.
 
