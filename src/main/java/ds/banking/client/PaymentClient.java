@@ -10,6 +10,8 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * The Order Service side: sends a debit at least once and makes it effectively once together with the
@@ -21,7 +23,8 @@ import java.util.Optional;
  * between attempts; the run stops at its attempt limit or total deadline), FR-023 (a final answer ends
  * the run and is recorded), FR-024 (an exhausted run is {@code UNKNOWN}, never "failed", and keeps its
  * key), FR-025 (a second unresolved transaction on an account is refused locally), FR-026 (unresolved
- * entries are resent by {@link #recoverPending()}), NFR-004 (one log
+ * entries are resent by {@link #recoverPending()}), FR-027 ({@link #cancel} saves the switch to cancel
+ * before sending it, and a send always uses the current journal operation), NFR-004 (one log
  * line per attempt).
  *
  * <p>Thread safety: the journal serializes state changes in its database; the other fields are
@@ -36,6 +39,8 @@ public final class PaymentClient {
     private final Sleeper sleeper;
     private final Clock clock;
     private final ClientHooks hooks;
+    /** Keys this client is sending right now; a cancel of one of them is refused (research R12). */
+    private final Set<Long> active = ConcurrentHashMap.newKeySet();
 
     public PaymentClient(ClientJournal journal, BankingHttpClient http, RetryPolicy policy, Backoff backoff,
             Sleeper sleeper, Clock clock) {
@@ -73,7 +78,39 @@ public final class PaymentClient {
                     "account " + accountId + " has an unresolved transaction; resolve it first");
         }
         hooks.at(ClientHooks.Point.AFTER_RESERVE, reserved.get());
-        return send(reserved.get());
+        return sendExclusive(reserved.get().sequenceKey());
+    }
+
+    /**
+     * Cancels the unresolved debit with {@code key} (FR-027): first the journal entry is switched from
+     * debit to cancel and committed, then the cancel is sent like any other operation. Refused locally,
+     * with nothing sent, if the key is not an unresolved debit of {@code accountId} in the journal, or if
+     * this client is sending that key right now (research R12).
+     */
+    public TransactionResult cancel(String accountId, long key) {
+        if (!active.add(key)) {
+            return refusedCancel(accountId, key, "key " + key + " is being sent right now");
+        }
+        try {
+            Optional<JournalEntry> current = journal.find(key);
+            if (current.isPresent() && current.get().operation() == Operation.CANCEL
+                    && current.get().state() != JournalState.RESOLVED && current.get().accountId().equals(accountId)) {
+                return send(key); // already switched by an earlier run: just send the cancel
+            }
+            Optional<JournalEntry> switched = journal.switchToCancel(accountId, key);
+            if (switched.isEmpty()) {
+                return refusedCancel(accountId, key, "key " + key + " is not an unresolved debit of " + accountId);
+            }
+            hooks.at(ClientHooks.Point.AFTER_CANCEL_SWITCH, switched.get());
+            return send(key);
+        } finally {
+            active.remove(key);
+        }
+    }
+
+    private static TransactionResult refusedCancel(String accountId, long key, String reason) {
+        ClientLog.note("op=CANCEL account=" + accountId + " key=" + key + " result=refused reason=" + reason);
+        return TransactionResult.refused(accountId, reason);
     }
 
     /**
@@ -87,18 +124,41 @@ public final class PaymentClient {
         for (JournalEntry entry : journal.unresolved()) {
             ClientLog.note("op=" + entry.operation() + " account=" + entry.accountId() + " key="
                     + entry.sequenceKey() + " recovering state=" + entry.state() + " attempts=" + entry.attempts());
-            results.add(send(entry));
+            results.add(sendExclusive(entry.sequenceKey()));
         }
         return results;
     }
 
-    /** One send run for a journal entry, with fresh attempt and time limits (FR-022). */
-    TransactionResult send(JournalEntry entry) {
-        long key = entry.sequenceKey();
+    /** Sends {@code key} unless another thread of this client is sending it right now (research R12). */
+    private TransactionResult sendExclusive(long key) {
+        if (!active.add(key)) {
+            JournalEntry entry = journal.find(key).orElseThrow();
+            return TransactionResult.refused(entry.accountId(), "key " + key + " is being sent right now");
+        }
+        try {
+            return send(key);
+        } finally {
+            active.remove(key);
+        }
+    }
+
+    /**
+     * One send run for a journal entry, with fresh attempt and time limits (FR-022). The entry is read
+     * again from the journal, so the run always sends its current operation (FR-027); an entry that is
+     * already resolved is reported from the journal without sending.
+     */
+    private TransactionResult send(long key) {
+        JournalEntry entry = journal.find(key).orElseThrow();
+        if (entry.state() == JournalState.RESOLVED) {
+            return new TransactionResult(resultFor(entry.operation(), entry.outcome()), entry.accountId(), key,
+                    entry.outcome(), true, entry.balanceAfter(), 0, "already resolved");
+        }
         RetryRun run = new RetryRun(policy, clock);
         while (run.mayAttempt()) {
             boolean isRetry = journal.countAttempt(key) > 0;
-            AttemptResult result = http.debit(entry.accountId(), key, entry.amount(), isRetry, run.attemptTimeout());
+            AttemptResult result = entry.operation() == Operation.DEBIT
+                    ? http.debit(entry.accountId(), key, entry.amount(), isRetry, run.attemptTimeout())
+                    : http.cancel(entry.accountId(), key, isRetry, run.attemptTimeout());
             run.attempted();
             ClientLog.attempt(entry.operation(), entry.accountId(), key, run.attempts(), isRetry, result);
             if (result instanceof AttemptResult.Final done) {
@@ -129,17 +189,26 @@ public final class PaymentClient {
         Long balanceAfter = answer == null ? null : answer.balanceAfter();
         journal.resolve(entry.sequenceKey(), outcome, balanceAfter);
         String message = answer == null || answer.message() == null ? "HTTP " + done.status() : answer.message();
-        return new TransactionResult(debitResult(outcome), entry.accountId(), entry.sequenceKey(), outcome,
-                answer == null ? null : answer.duplicate(), balanceAfter, attempts, message);
+        return new TransactionResult(resultFor(entry.operation(), outcome), entry.accountId(), entry.sequenceKey(),
+                outcome, answer == null ? null : answer.duplicate(), balanceAfter, attempts, message);
     }
 
-    /** Client result of a final debit answer (data-model.md, client-side result table). */
-    private static Result debitResult(Outcome outcome) {
-        if (outcome == Outcome.EXECUTED) {
-            return Result.SUCCEEDED;
+    /** Client result of a final answer (data-model.md, client-side result table). */
+    private static Result resultFor(Operation operation, Outcome outcome) {
+        if (operation == Operation.DEBIT) {
+            if (outcome == Outcome.EXECUTED) {
+                return Result.SUCCEEDED;
+            }
+            if (outcome == Outcome.CANCELLED || outcome == Outcome.STALE_KEY) {
+                return Result.NOT_EXECUTED;
+            }
+            return Result.REJECTED;
         }
-        if (outcome == Outcome.CANCELLED || outcome == Outcome.STALE_KEY) {
-            return Result.NOT_EXECUTED;
+        if (outcome == Outcome.CANCELLED || outcome == Outcome.ALREADY_REJECTED || outcome == Outcome.STALE_KEY) {
+            return Result.CANCELLED;
+        }
+        if (outcome == Outcome.ALREADY_EXECUTED) {
+            return Result.SUCCEEDED; // the cancel came too late: the money was debited
         }
         return Result.REJECTED;
     }

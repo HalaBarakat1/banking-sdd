@@ -44,6 +44,14 @@ public final class BankingHttpClient {
         return post("/accounts/" + accountId + "/debits", body, timeout);
     }
 
+    /** One cancel attempt with the given response timeout (FR-015). */
+    public AttemptResult cancel(String accountId, long sequenceKey, boolean isRetry, Duration timeout) {
+        ObjectNode body = Json.mapper().createObjectNode();
+        body.put("sequence_key", sequenceKey);
+        body.put("is_retry", isRetry);
+        return post("/accounts/" + accountId + "/cancellations", body, timeout);
+    }
+
     private AttemptResult post(String path, ObjectNode body, Duration timeout) {
         HttpRequest request = HttpRequest.newBuilder(baseUri.resolve(path))
                 .timeout(timeout)

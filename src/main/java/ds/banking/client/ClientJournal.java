@@ -25,7 +25,8 @@ import org.sqlite.SQLiteConfig;
  * advanced and saved before anything is sent), FR-020 (the pending transaction is recorded in the same
  * transaction as the key), FR-021 (the attempt counter is committed before each send), FR-024
  * ({@code UNKNOWN} entries keep their key), FR-025 and EC-009 (at most one unresolved entry per
- * account, enforced by a partial unique index), NFR-001 (WAL and {@code synchronous=FULL}, as on the
+ * account, enforced by a partial unique index), FR-027 (the switch from debit to cancel is committed
+ * before anything is sent), NFR-001 (WAL and {@code synchronous=FULL}, as on the
  * server; research R6).
  *
  * <p>Thread safety: no mutable fields; each call uses its own connection and an {@code IMMEDIATE}
@@ -191,6 +192,26 @@ public final class ClientJournal {
             }
             return null;
         });
+    }
+
+    /**
+     * Switches an unresolved debit to a cancel in one committed update: {@code operation := CANCEL},
+     * {@code attempts := 0}, {@code state := PENDING} (FR-027). It is committed before anything is sent
+     * for the key, so a later start always resends the cancel, never the old debit. Returns the switched
+     * entry, or empty if the key is not an unresolved debit of {@code accountId}.
+     */
+    public Optional<JournalEntry> switchToCancel(String accountId, long key) {
+        boolean switched = inTransaction(c -> {
+            try (PreparedStatement s = c.prepareStatement("UPDATE journal SET operation = 'CANCEL', attempts = 0, "
+                    + "state = 'PENDING', updated_at = ? WHERE sequence_key = ? AND account_id = ? "
+                    + "AND operation = 'DEBIT' AND state <> 'RESOLVED'")) {
+                s.setString(1, Instant.now().toString());
+                s.setLong(2, key);
+                s.setString(3, accountId);
+                return s.executeUpdate() == 1;
+            }
+        });
+        return switched ? find(key) : Optional.empty();
     }
 
     /** Marks the entry UNKNOWN: retries of this run were exhausted; the key is kept (FR-024). */

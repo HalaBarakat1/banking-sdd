@@ -31,7 +31,7 @@ public final class ClientMain {
 
     private static final Set<String> OPTIONS = Set.of("url", "db", "connect-timeout-ms", "timeout-ms", "attempts",
             "max-total-ms", "backoff-ms", "max-backoff-ms");
-    private static final Set<String> COMMANDS = Set.of("debit", "recover", "journal");
+    private static final Set<String> COMMANDS = Set.of("debit", "cancel", "recover", "journal");
 
     static final String USAGE = """
             Usage: java -jar banking-sdd.jar client [--url http://127.0.0.1:8080] [--db data/client.db]
@@ -39,6 +39,7 @@ public final class ClientMain {
                      [--backoff-ms 100] [--max-backoff-ms 2000] <command>
             Commands:
               debit <account> <amount>   resend unresolved entries, then debit an amount (minor units)
+              cancel <account> <key>      burn the key of an unresolved debit, then resend the rest
               recover                    resend every unresolved journal entry
               journal [account]          print journal entries (read-only)""";
 
@@ -90,6 +91,13 @@ public final class ClientMain {
                 }
                 requireAccount(arguments.get(0));
                 Args.parseNumber("amount", arguments.get(1), 1, Long.MAX_VALUE);
+            }
+            case "cancel" -> {
+                if (arguments.size() != 2) {
+                    throw new UsageException("cancel expects <account> <key>");
+                }
+                requireAccount(arguments.get(0));
+                Args.parseNumber("key", arguments.get(1), 1, Long.MAX_VALUE);
             }
             case "recover" -> {
                 if (!arguments.isEmpty()) {
@@ -158,6 +166,7 @@ public final class ClientMain {
             }
             return switch (options.command()) {
                 case "debit" -> debit(options, out, err);
+                case "cancel" -> cancel(options, out, err);
                 case "recover" -> recover(options, out, err);
                 case "journal" -> journal(options, out);
                 default -> 2;
@@ -173,6 +182,18 @@ public final class ClientMain {
         PaymentClient client = PaymentClient.create(options.url(), options.database(), options.policy());
         List<TransactionResult> results = new ArrayList<>(client.recoverPending());
         results.add(client.debit(options.arguments().get(0), Long.parseLong(options.arguments().get(1))));
+        return print(results, out, err);
+    }
+
+    /**
+     * Saves the switch to cancel and sends it first (FR-027), so start-up recovery can never resend the
+     * debit the user wants stopped; then resends any other unresolved entry (FR-026).
+     */
+    private static int cancel(Options options, PrintStream out, PrintStream err) {
+        PaymentClient client = PaymentClient.create(options.url(), options.database(), options.policy());
+        List<TransactionResult> results = new ArrayList<>();
+        results.add(client.cancel(options.arguments().get(0), Long.parseLong(options.arguments().get(1))));
+        results.addAll(client.recoverPending());
         return print(results, out, err);
     }
 
