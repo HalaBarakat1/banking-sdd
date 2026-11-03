@@ -109,8 +109,9 @@ parts and explicit logs make that possible.
 - Testing: JUnit 5 (`org.junit.jupiter`).
 - Logging: `java.util.logging` (no extra dependency).
 - No other runtime or test dependency may be added without amending this constitution.
-- Source layout: production code under `src/main/java`, tests under `src/test/java`;
-  client, server, persistence, and fault-injection code live in separate packages.
+- Source layout: production code under `src/main/java`, tests under `tests/java` (the assignment's
+  required `src/` and `tests/` folders); client, server, persistence, and fault-injection code live in
+  separate packages.
 
 ## Development Workflow & Quality Gates
 
@@ -136,4 +137,4 @@ parts and explicit logs make that possible.
 - Compliance is checked at every phase: plan's Constitution Check, `/speckit-analyze` before
   implementation, and review of every task commit against Principles I–VI.
 
-**Version**: 1.0.0 | **Ratified**: 2026-11-03 | **Last Amended**: 2026-11-03
+**Version**: 1.0.1 | **Ratified**: 2026-11-03 | **Last Amended**: 2026-11-03
