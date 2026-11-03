@@ -4,6 +4,7 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import ds.banking.protocol.AccountIds;
 import ds.banking.protocol.Answer;
+import ds.banking.protocol.CancelRequest;
 import ds.banking.protocol.DebitRequest;
 import ds.banking.protocol.InvalidRequestException;
 import ds.banking.protocol.Json;
@@ -20,25 +21,26 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * {@code POST /accounts/{id}/debits}: a thin HTTP adapter around the {@link Decider}; it holds no
- * business rules (plan.md, request flow).
+ * {@code POST /accounts/{id}/debits} and {@code POST /accounts/{id}/cancellations}: a thin HTTP adapter
+ * around the {@link Decider}; it holds no business rules (plan.md, request flow).
  *
- * <p>Implements: FR-001 to FR-004 (contract, outcomes, status per operation and outcome), FR-012
- * (strict parsing before any database access; invalid input consumes no key), FR-013 (the answer is
- * written only after the decider returned, which is after {@code COMMIT}), NFR-004 (exactly one
+ * <p>Implements: FR-001 to FR-004 and FR-015 (contracts, outcomes, status per operation and outcome),
+ * FR-012 (strict parsing before any database access; invalid input consumes no key), FR-013 (the answer
+ * is written only after the decider returned, which is after {@code COMMIT}), NFR-004 (exactly one
  * request-log line per request). A lock wait beyond {@code busy_timeout} is answered {@code 503} and
  * any other unexpected failure {@code 500}, both with outcome {@code UNAVAILABLE}, so the client
  * retries (research R4).
  *
  * <p>Fault hooks (FR-028, research R5): after parsing and validation the injector chooses at most one
- * scenario. Before the decision: FS-1 closes the connection without deciding or answering, FS-2 does
- * the same and asks the server to crash-restart, FS-4a waits. After the commit: FS-3 closes the
- * connection without answering, FS-4b waits before answering. The decider never sees the injector
- * (NFR-005).
+ * scenario for the request's account and operation. Before the decision: FS-1 closes the connection
+ * without deciding or answering, FS-2 does the same and asks the server to crash-restart, FS-4a waits.
+ * After the commit: FS-3 closes the connection without answering, FS-4b waits before answering. The
+ * decider never sees the injector (NFR-005).
  *
  * <p>Thread safety: no mutable fields; the decider and the injector are thread-safe.
  */
@@ -49,6 +51,10 @@ public final class OperationHandler implements HttpHandler {
     private final Decider decider;
     private final FaultInjector faults;
     private final Consumer<Duration> crash;
+
+    /** A parsed and validated request: what to log and how to decide it. */
+    private record Parsed(Operation operation, long key, boolean isRetry, Supplier<Answer> decision) {
+    }
 
     /**
      * @param decider the decision rules
@@ -64,38 +70,51 @@ public final class OperationHandler implements HttpHandler {
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         String[] parts = exchange.getRequestURI().getPath().split("/");
-        // parts: "", "accounts", id, "debits"
-        if (parts.length != 4 || !parts[3].equals("debits")) {
+        // parts: "", "accounts", id, "debits" | "cancellations"
+        Operation operation = parts.length != 4 ? null : switch (parts[3]) {
+            case "debits" -> Operation.DEBIT;
+            case "cancellations" -> Operation.CANCEL;
+            default -> null;
+        };
+        if (operation == null) {
             HttpIo.sendMessage(exchange, 404, "no such endpoint: POST " + exchange.getRequestURI().getPath());
             return;
         }
-        debit(exchange, parts[2]);
+        handle(exchange, parts[2], operation);
     }
 
-    private void debit(HttpExchange exchange, String accountId) throws IOException {
+    private Parsed parse(String accountId, Operation operation, byte[] body) throws InvalidRequestException {
+        if (body == null) {
+            throw new InvalidRequestException("request body too large");
+        }
+        if (operation == Operation.DEBIT) {
+            DebitRequest r = Json.parseDebit(body);
+            return new Parsed(operation, r.sequenceKey(), r.isRetry(), () -> decider.debit(accountId, r));
+        }
+        CancelRequest r = Json.parseCancel(body);
+        return new Parsed(operation, r.sequenceKey(), r.isRetry(), () -> decider.cancel(accountId, r));
+    }
+
+    private void handle(HttpExchange exchange, String accountId, Operation operation) throws IOException {
         long started = System.nanoTime();
-        DebitRequest request;
+        Parsed request;
         try {
-            byte[] body = HttpIo.readBody(exchange);
-            if (body == null) {
-                throw new InvalidRequestException("request body too large");
-            }
-            request = Json.parseDebit(body);
+            request = parse(accountId, operation, HttpIo.readBody(exchange));
         } catch (InvalidRequestException e) {
             Answer invalid = new Answer(accountId, null, Outcome.INVALID_REQUEST, null, null, null, e.getMessage());
-            respond(exchange, StatusMapper.statusFor(Operation.DEBIT, Outcome.INVALID_REQUEST), invalid, null, null,
-                    started);
+            respond(exchange, StatusMapper.statusFor(operation, Outcome.INVALID_REQUEST), invalid, operation, null,
+                    null, started);
             return;
         }
         if (!AccountIds.isValid(accountId)) {
-            Answer unknown = new Answer(accountId, request.sequenceKey(), Outcome.UNKNOWN_ACCOUNT, false, null, null,
+            Answer unknown = new Answer(accountId, request.key(), Outcome.UNKNOWN_ACCOUNT, false, null, null,
                     "no account " + accountId);
-            respond(exchange, StatusMapper.statusFor(Operation.DEBIT, unknown.outcome()), unknown, request, null,
-                    started);
+            respond(exchange, StatusMapper.statusFor(operation, unknown.outcome()), unknown, operation, request,
+                    null, started);
             return;
         }
 
-        Optional<FaultRule> fault = faults.choose(accountId, Operation.DEBIT);
+        Optional<FaultRule> fault = faults.choose(accountId, operation);
         if (fault.isPresent() && fault.get().scenario().beforeDecision()) {
             FaultRule rule = fault.get();
             switch (rule.scenario()) {
@@ -120,8 +139,8 @@ public final class OperationHandler implements HttpHandler {
         Answer answer;
         int status;
         try {
-            answer = decider.debit(accountId, request);
-            status = StatusMapper.statusFor(Operation.DEBIT, answer.outcome());
+            answer = request.decision().get();
+            status = StatusMapper.statusFor(operation, answer.outcome());
         } catch (StoreException e) {
             boolean busy = e.isBusy();
             if (!busy) {
@@ -138,13 +157,13 @@ public final class OperationHandler implements HttpHandler {
         FaultRule after = fault.filter(r -> !r.scenario().beforeDecision()).orElse(null);
         if (after != null && after.scenario() == FaultScenario.DROP_RESPONSE) {
             // FS-3: the decision is committed; close the connection without an answer.
-            log(answer, request, fault.get(), started);
+            log(answer, operation, request, after, started);
             return;
         }
         if (after != null && after.scenario() == FaultScenario.DELAY_AFTER_EXECUTE && !pause(after)) {
             return;
         }
-        respond(exchange, status, answer, request, fault.orElse(null), started);
+        respond(exchange, status, answer, operation, request, fault.orElse(null), started);
     }
 
     /** Waits for a delay scenario; false if the server is shutting down (the request is then dropped). */
@@ -158,28 +177,28 @@ public final class OperationHandler implements HttpHandler {
         }
     }
 
-    private static Answer unavailable(String accountId, DebitRequest request, String message) {
-        return new Answer(accountId, request.sequenceKey(), Outcome.UNAVAILABLE, false, null, null, message);
+    private static Answer unavailable(String accountId, Parsed request, String message) {
+        return new Answer(accountId, request.key(), Outcome.UNAVAILABLE, false, null, null, message);
     }
 
     /**
      * Sends the answer and always writes the log line, even when sending fails because the client has
      * already given up (FS-4): every request gets exactly one line (NFR-004).
      */
-    private static void respond(HttpExchange exchange, int status, Answer answer, DebitRequest request,
-            FaultRule fault, long started) throws IOException {
+    private static void respond(HttpExchange exchange, int status, Answer answer, Operation operation,
+            Parsed request, FaultRule fault, long started) throws IOException {
         try {
             HttpIo.sendJson(exchange, status, Json.write(answer));
         } finally {
-            log(answer, request, fault, started);
+            log(answer, operation, request, fault, started);
         }
     }
 
-    private static void log(Answer answer, DebitRequest request, FaultRule fault, long started) {
+    private static void log(Answer answer, Operation operation, Parsed request, FaultRule fault, long started) {
         RequestLog.log(new RequestLog.Entry(
-                Operation.DEBIT,
+                operation,
                 answer.accountId(),
-                request == null ? null : request.sequenceKey(),
+                request == null ? null : request.key(),
                 request == null ? null : request.isRetry(),
                 LogDecision.of(answer.outcome(), Boolean.TRUE.equals(answer.duplicate())),
                 answer.outcome(),
@@ -188,8 +207,8 @@ public final class OperationHandler implements HttpHandler {
     }
 
     /** FS-1 / FS-2: no decision was made; the exchange is closed without a response by the caller. */
-    private static void dropped(String accountId, DebitRequest request, FaultRule fault, long started) {
-        RequestLog.log(new RequestLog.Entry(Operation.DEBIT, accountId, request.sequenceKey(), request.isRetry(),
+    private static void dropped(String accountId, Parsed request, FaultRule fault, long started) {
+        RequestLog.log(new RequestLog.Entry(request.operation(), accountId, request.key(), request.isRetry(),
                 LogDecision.DROPPED, null, fault.scenario().name(), elapsedMs(started)));
     }
 
