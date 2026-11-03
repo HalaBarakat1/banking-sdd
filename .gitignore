@@ -1,0 +1,14 @@
+# Build output
+target/
+
+# Runtime databases: server bank.db, client client.db and their SQLite WAL files (NFR-001 data,
+# never part of the repository)
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# IDE files
+.idea/
+*.iml
+.vscode/
