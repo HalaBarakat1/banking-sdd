@@ -6,6 +6,9 @@ server crashes, responses are lost or arrive too late, or the client itself cras
 built with **Spec-Driven Development** (GitHub Spec Kit): every line of code traces back to the
 specification.
 
+The full homework report, with the code walkthrough, fault-scenario runs and reflection, is in
+[docs/Report.pdf](docs/Report.pdf) ([Word version](docs/Report.docx)).
+
 | | |
 |---|---|
 | **Track** | Track 1: Fault-Tolerant Distributed Banking Transaction (effectively-once execution) |
@@ -61,6 +64,7 @@ src/main/java/ds/banking/                production code
   protocol/  server/{decision,store,http,fault,log}/  client/  cli/
 tests/java/ds/banking/                   tests: unit/ contract/ integration/ process/ soak/ support/
 docs/quickstart-run.txt                  transcript of the manual demo run (T058)
+docs/Report.pdf, docs/Report.docx        homework report
 ```
 
 ## Build and test
