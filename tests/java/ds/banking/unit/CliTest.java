@@ -123,7 +123,8 @@ class CliTest {
     @ParameterizedTest(name = "[{index}] client {0}")
     @ValueSource(strings = {"", "fly", "debit", "debit A", "debit A x", "debit A 0", "debit a%b 10",
         "--attempts 0 debit A 10", "--timeout-ms -5 debit A 10", "--backoff-ms 50 --max-backoff-ms 10 debit A 10",
-        "--url ::: debit A 10", "--bogus 1 debit A 10", "recover A"})
+        "--url ::: debit A 10", "--bogus 1 debit A 10", "recover A", "cancel A", "cancel A x", "cancel A 0",
+        "cancel a%b 1", "cancel A 1 2"})
     @DisplayName("contracts/client-cli.md: invalid client arguments exit with code 2")
     void invalidClientArguments(String args) {
         String[] parts = args.isEmpty() ? new String[] {"client"} : ("client " + args).split(" ");
@@ -170,6 +171,38 @@ class CliTest {
         assertEquals("UNKNOWN", recovered.get("result").asText());
         assertEquals(1, recovered.get("sequence_key").asLong());
         assertEquals("REFUSED", lastJson().get("result").asText());
+    }
+
+    @Test
+    @DisplayName("FR-027: cancel of a key that is not in the journal is REFUSED locally, exit 4")
+    void cancelUnknownKey() throws Exception {
+        int code = main(fast("http://127.0.0.1:" + closedPort(), dir.resolve("client.db").toString(),
+                "cancel", "A", "7"));
+
+        assertEquals(4, code);
+        assertEquals("REFUSED", lastJson().get("result").asText());
+    }
+
+    @Test
+    @DisplayName("FR-027 / US5-AS1: cancel of an UNKNOWN debit burns the key on the server; no money moves, exit 0")
+    void cancelUnknownDebit() throws Exception {
+        String db = dir.resolve("client.db").toString();
+        main(fast("http://127.0.0.1:" + closedPort(), db, "debit", "A", "10"));
+
+        try (TestServer server = TestServer.start(dir)) {
+            server.store().seedAccount("A", 1000);
+
+            int code = main(fast("http://127.0.0.1:" + server.port(), db, "cancel", "A", "1"));
+
+            assertEquals(0, code);
+            List<String> lines = outLines();
+            assertEquals(1, lines.size(), lines.toString());
+            JsonNode result = lastJson();
+            assertEquals("CANCELLED", result.get("result").asText());
+            assertEquals("CANCELLED", result.get("outcome").asText());
+            assertEquals(1000, server.store().readAccount("A").orElseThrow().balance());
+            assertEquals(1, server.store().readAccount("A").orElseThrow().lastSequenceKey());
+        }
     }
 
     @Test
