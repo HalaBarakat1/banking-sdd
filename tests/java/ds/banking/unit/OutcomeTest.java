@@ -24,7 +24,7 @@ class OutcomeTest {
                 EnumSet.allOf(Outcome.class));
     }
 
-    @ParameterizedTest(name = "{0}")
+    @ParameterizedTest(name = "[{index}] {0}")
     @EnumSource(Outcome.class)
     @DisplayName("FR-004: only UNAVAILABLE is retryable, every other outcome is final")
     void onlyUnavailableIsRetryable(Outcome outcome) {

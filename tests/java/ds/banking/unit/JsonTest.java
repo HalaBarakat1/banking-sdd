@@ -59,7 +59,7 @@ class JsonTest {
         assertEquals(stale, Json.parseAnswer(bytes(staleJson)));
     }
 
-    @ParameterizedTest(name = "{0}")
+    @ParameterizedTest(name = "[{index}] {0}")
     @ValueSource(strings = {
         "{\"sequence_key\":7,\"amount\":250,\"is_retry\":false,\"extra\":1}",
         "{\"sequence_key\":7,\"amount\":250}",
@@ -86,7 +86,7 @@ class JsonTest {
         assertThrows(InvalidRequestException.class, () -> Json.parseDebit(bytes(body)));
     }
 
-    @ParameterizedTest(name = "{0}")
+    @ParameterizedTest(name = "[{index}] {0}")
     @ValueSource(strings = {
         "{\"sequence_key\":8}",
         "{\"sequence_key\":8,\"is_retry\":false,\"amount\":5}",
