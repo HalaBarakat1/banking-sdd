@@ -26,11 +26,12 @@ Run one group at a time:
 mvnw.cmd test -Dgroups=integration
 ```
 
-Groups: `unit`, `contract`, `integration`, `process`, `soak`.
+Groups (`@Tag` on every test class): `unit`, `contract`, `integration`, `process`, `soak`. The default
+`verify` runs all five.
 
 | Scenario | Proven by | Spec |
 |---|---|---|
-| Debit once, duplicate replay, insufficient funds, gaps | `unit`, `integration` | US1, SC-003 |
+| Debit once, duplicate replay, insufficient funds, gaps, retries exhausted → `UNKNOWN` | `unit`, `integration` | US1, FR-024, EC-008 |
 | FS-1, FS-2, FS-3, FS-4a, FS-4b | `integration` | US2, SC-002 |
 | 50 simultaneous copies, late and stale copies | `integration` | US3, SC-003 |
 | Client crash before send / after execute | `integration` | US4, SC-005 |

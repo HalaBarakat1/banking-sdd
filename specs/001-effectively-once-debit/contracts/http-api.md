@@ -3,9 +3,15 @@
 **Feature**: [spec.md](../spec.md) | **Plan**: [plan.md](../plan.md) | **Date**: 2026-11-03
 
 All bodies are JSON (`Content-Type: application/json; charset=utf-8`), field names in `snake_case`.
-Unknown request fields are rejected with `INVALID_REQUEST`. Every response body has an `outcome`
-field (or is a plain inspection result). The client decides by **status class**: `2xx` in effect,
-`4xx` final, `5xx` / no answer / unparseable body → retry with the same key (research R4).
+Parsing is strict (research R8): unknown fields, missing fields, `null`, fractional numbers
+(`2.5`) and numbers sent as strings (`"250"`) are all `INVALID_REQUEST` — nothing is rounded or
+defaulted (FR-012). Every response body except plain inspection results has an `outcome` field, which
+is the machine-readable error code (constitution, Principle IV).
+
+The status depends on the operation **and** the outcome (tables below), computed by
+`StatusMapper.statusFor(operation, outcome)`. The client decides by **status class**: `2xx` final
+(in effect), `4xx` final (rejected), `5xx` / no answer / unparseable `2xx` body → retryable, resend
+with the same key. A `4xx` is final even if its body cannot be parsed (research R4).
 
 ---
 
@@ -65,8 +71,8 @@ field (or is a plain inspection result). The client decides by **status class**:
 | Outcome | HTTP | Class | Notes |
 |---|---|---|---|
 | `CANCELLED` | 200 | in effect | new key burnt, or `duplicate=true` if already cancelled |
-| `ALREADY_REJECTED` | 200 | in effect | the debit was refused; nothing will ever be debited |
-| `ALREADY_EXECUTED` | 409 | final | cancel too late; includes original `amount` and `balance_after` |
+| `ALREADY_REJECTED` | 200 | in effect | the debit was refused; nothing will ever be debited; `duplicate=true` |
+| `ALREADY_EXECUTED` | 409 | final | cancel too late; includes original `amount` and `balance_after`; `duplicate=true` |
 | `STALE_KEY` | 409 | final | never decided and never will be; client treats as "not executed" |
 | `INVALID_REQUEST` | 400 | final | |
 | `UNKNOWN_ACCOUNT` | 404 | final | |
@@ -114,19 +120,21 @@ different one; `400` if invalid.
   "rules": [
     { "scenario": "DROP_RESPONSE", "trigger": "NEXT_N", "count": 1, "account_id": "A" },
     { "scenario": "DELAY_BEFORE_EXECUTE", "trigger": "PROBABILITY", "probability": 0.1,
-      "delay_ms": 600, "seed": 42 }
-  ]
+      "delay_ms": 600, "operation": "DEBIT" }
+  ],
+  "seed": 42
 }
 ```
 
 Field rules: [data-model.md — Fault configuration](../data-model.md#fault-configuration-server-memory-only-never-persisted).
-Faults apply only to the debit and cancel endpoints.
+Faults apply only to the debit and cancel endpoints; a request triggers at most one scenario, and the
+rules survive an FS-2 crash-restart.
 
 ## 5. What the client sees per fault scenario
 
 | Scenario | Client observes | Client action |
 |---|---|---|
-| FS-1 `DROP_REQUEST` | connection closed, no response (`IOException`) | retry, `is_retry=true` |
+| FS-1 `DROP_REQUEST` | connection closed, no response (`IOException`); server logs `decision=DROPPED` | retry, `is_retry=true` |
 | FS-2 `CRASH_BEFORE_EXECUTE` | connection closed, then connection refused during downtime | retry with backoff until the server is back |
 | FS-3 `DROP_RESPONSE` | connection closed, no response | retry → `EXECUTED`, `duplicate=true` |
 | FS-4a `DELAY_BEFORE_EXECUTE` | timeout | retry; the two attempts race, the database lock serializes them |

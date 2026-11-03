@@ -3,8 +3,18 @@
 **Feature**: [spec.md](../spec.md) | **Plan**: [plan.md](../plan.md) | **Date**: 2026-11-03
 
 One runnable jar with two sub-commands. Output is one human-readable line per event plus a final
-JSON line, so demos are readable and scripts can parse the result. Exit code `0` = command completed
-(whatever the business outcome), `2` = invalid arguments, `3` = result `UNKNOWN`, `1` = unexpected error.
+JSON line, so demos are readable and scripts can parse the result.
+
+| Exit code | Meaning |
+|---|---|
+| `0` | command completed and every transaction it touched (including recovered ones) has a final result (`SUCCEEDED`, `REJECTED`, `NOT_EXECUTED`, `CANCELLED`) |
+| `1` | unexpected error (bug, unreadable `client.db`) |
+| `2` | invalid arguments |
+| `3` | at least one transaction touched by the command (the new one or a recovered one) ended `UNKNOWN` |
+| `4` | refused locally, nothing sent (`REFUSED`: unresolved entry on the account — EC-009, or cancel of a resolved key, a key not in the journal, or a key being sent right now) |
+
+When several codes apply (for example recovery leaves an entry `UNKNOWN` and the new `debit` is then
+`REFUSED`), the highest-priority code wins: `1` > `2` > `3` > `4` > `0`.
 
 ## Server
 
@@ -20,7 +30,8 @@ java -jar target/banking-sdd.jar server [--port 8080] [--db data/bank.db] [--thr
 
 ```text
 java -jar target/banking-sdd.jar client [--url http://localhost:8080] [--db data/client.db]
-        [--timeout-ms 2000] [--attempts 6] [--backoff-ms 100] [--max-backoff-ms 2000] <command>
+        [--connect-timeout-ms 1000] [--timeout-ms 2000] [--attempts 6] [--max-total-ms 30000]
+        [--backoff-ms 100] [--max-backoff-ms 2000] <command>
 ```
 
 | Command | Effect | Spec |
@@ -30,10 +41,11 @@ java -jar target/banking-sdd.jar client [--url http://localhost:8080] [--db data
 | `recover` | resend every unresolved journal entry | US4, FR-026 |
 | `journal [account]` | print journal entries | inspection |
 
-`debit`, `cancel` and `recover` resend every unresolved entry, as FR-026 requires on start.
+`debit`, `cancel` and `recover` send requests, so they first resend every unresolved entry, as
+FR-026 requires; `journal` is read-only and sends nothing.
 `cancel` first saves the switch of that entry from `DEBIT` to `CANCEL` in the journal (FR-027), and
 only then runs recovery, which therefore sends the cancel, never the old debit. If the client crashes
-in between, the next start of any command resends the cancel. `journal` only reads.
+in between, the next start of any sending command resends the cancel.
 
 Example final line:
 

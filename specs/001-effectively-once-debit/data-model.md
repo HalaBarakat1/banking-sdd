@@ -70,7 +70,19 @@ Validation (FR-001, FR-015, EC-004) happens before the transaction and never tou
 | 7 | new key, cancel | — | `CANCELLED` | last key = key; insert record |
 
 Rows 5–7 are the only writes; they update `accounts` and insert into `transaction_records` in the
-same transaction, then commit before the answer is written (FR-013).
+same transaction, then commit before the answer is written (FR-013). `ALREADY_EXECUTED` and
+`ALREADY_REJECTED` replay a decision, so they carry `duplicate = true`.
+
+### Log decision per answer (NFR-004)
+
+The `decision` field of the request log line says what this request did; `outcome` gives the detail.
+
+| This request… | Outcomes | `decision` |
+|---|---|---|
+| wrote a record that executed or cancelled (rows 5, 7) | `EXECUTED`, `CANCELLED` | `EXECUTED` |
+| replayed an existing record (row 3) | any replayed outcome, `ALREADY_EXECUTED`, `ALREADY_REJECTED` | `DUPLICATE` |
+| wrote a refusal record (row 6) or wrote nothing (rows 1, 2, 4, invalid, unavailable) | `INSUFFICIENT_FUNDS`, `STALE_KEY`, `KEY_CONFLICT`, `INVALID_REQUEST`, `UNKNOWN_ACCOUNT`, `UNAVAILABLE` | `REJECTED` |
+| was dropped by FS-1 / FS-2 before deciding | — (no answer) | `DROPPED` with `fault=` set |
 
 ---
 
@@ -94,7 +106,7 @@ same transaction, then commit before the answer is written (FR-013).
 | `state` | TEXT NOT NULL | `PENDING`, `UNKNOWN` or `RESOLVED` |
 | `outcome` | TEXT NULL | final outcome from the server once `RESOLVED` |
 | `balance_after` | INTEGER NULL | from the answer, when present |
-| `attempts` | INTEGER NOT NULL | total attempts sent so far |
+| `attempts` | INTEGER NOT NULL | attempts of the **current** operation; incremented and committed before each send; reset to 0 by the switch to `CANCEL`; `is_retry = attempts_before_this_one > 0` (FR-021). Used **only** for `is_retry`; the retry limits count per send run (FR-022) |
 | `created_at`, `updated_at` | TEXT NOT NULL | ISO-8601 UTC, logs only |
 
 - Partial unique index `UNIQUE (account_id) WHERE state <> 'RESOLVED'` (FR-025, EC-009).
@@ -107,13 +119,17 @@ same transaction, then commit before the answer is written (FR-013).
           reserve (FR-019/020)
    ─────────────────────────────► PENDING ──── final outcome ────► RESOLVED (terminal)
                                      │  ▲
-                 retries exhausted   │  │  resend on restart (FR-026) or by user
+                 retries exhausted   │  │  resend on start (FR-026)
                                      ▼  │
-                                   UNKNOWN ── cancel: operation := CANCEL, state := PENDING (FR-027)
+                                   UNKNOWN
+
+   cancel (FR-027), allowed from UNKNOWN, or from PENDING when no thread of this client is sending it:
+       operation := CANCEL, attempts := 0, state := PENDING   (one committed update)
 ```
 
-- A `PENDING` entry found at start-up was interrupted by a client crash; it is resent with
-  `is_retry = true` (it may or may not have reached the server), using its current `operation`.
+- A `PENDING` entry found at start-up was interrupted by a client crash; it is resent using its
+  current `operation`, with `is_retry = true` if an attempt was already counted (it may have reached
+  the server) and `false` otherwise.
 - The switch `DEBIT` → `CANCEL` is a single journal update committed **before** anything is sent for
   that key (FR-027), so recovery always sends the latest intention, never an outdated debit.
 - Client-side result of a resolved entry:
@@ -125,7 +141,10 @@ same transaction, then commit before the answer is written (FR-013).
 | DEBIT | `CANCELLED`, `STALE_KEY` | `NOT_EXECUTED` |
 | CANCEL | `CANCELLED`, `ALREADY_REJECTED`, `STALE_KEY` | `CANCELLED` (no money moved) |
 | CANCEL | `ALREADY_EXECUTED` | `SUCCEEDED` (cancel too late; money was debited) |
-| any | retries exhausted | `UNKNOWN` (entry stays unresolved) |
+| CANCEL | `INVALID_REQUEST`, `UNKNOWN_ACCOUNT` | `REJECTED` |
+| any | `4xx` with an unparseable body | `REJECTED` (journal `outcome` = `NULL`, raw status logged) |
+| any | retries exhausted (attempts or total time) | `UNKNOWN` (entry stays unresolved) |
+| — | refused locally (EC-009, or cancel of a resolved key, a key not in the journal, or a key being sent right now) | `REFUSED` (nothing sent, no journal change) |
 
 ---
 
@@ -140,8 +159,12 @@ same transaction, then commit before the answer is written (FR-013).
 | `count` | int | required for `NEXT_N`, 1–10,000; decremented atomically |
 | `probability` | double | required for `PROBABILITY`, 0 < p ≤ 1 |
 | `account_id` | string, optional | limits the rule to one account |
+| `operation` | enum, optional | `DEBIT` or `CANCEL`; limits the rule to one operation |
 | `delay_ms` | int | required for `DELAY_*`, 1–60,000 |
 | `downtime_ms` | int | for `CRASH_BEFORE_EXECUTE`, 0–60,000, default 1000 |
-| `seed` | long, optional | seed for `PROBABILITY` rules (reproducible runs) |
+| `seed` | long, optional, config-level | seed of the draw sequence for `PROBABILITY` rules (research R5) |
 
-Invalid rules are refused as a whole; the previous config stays active (EC-012).
+- Invalid rules are refused as a whole; the previous config stays active (EC-012).
+- The probabilities of `PROBABILITY` rules that can match the same request (overlapping account and
+  operation filters) MUST add up to at most 1; a request triggers at most one scenario (FR-029).
+- The config and its `NEXT_N` counters survive an FS-2 crash-restart (FR-029).
