@@ -190,13 +190,13 @@ balance unchanged (spec, User Story 5).
 
 ### Tests for User Story 5 (write first, must fail)
 
-- [ ] T049 [P] [US5] `tests/java/ds/banking/unit/DecisionServiceCancelTest.java`: cancel rows of the decision table — new key → `CANCELLED`, last key set, no money moved (US5-AS1); repeated cancel → `CANCELLED` `duplicate=true` (US5-AS4); executed key → `ALREADY_EXECUTED` with original `amount` and `balance_after`, `duplicate=true` (US5-AS3); insufficient-funds key → `ALREADY_REJECTED`, `duplicate=true` (EC-010); stale undecided key → `STALE_KEY`; debit copy of a cancelled key → `CANCELLED` `duplicate=true`, not `KEY_CONFLICT` (US5-AS2, FR-011) [FR-011, FR-015…FR-018, EC-010]
+- [x] T049 [P] [US5] `tests/java/ds/banking/unit/DecisionServiceCancelTest.java`: cancel rows of the decision table — new key → `CANCELLED`, last key set, no money moved (US5-AS1); repeated cancel → `CANCELLED` `duplicate=true` (US5-AS4); executed key → `ALREADY_EXECUTED` with original `amount` and `balance_after`, `duplicate=true` (US5-AS3); insufficient-funds key → `ALREADY_REJECTED`, `duplicate=true` (EC-010); stale undecided key → `STALE_KEY`; debit copy of a cancelled key → `CANCELLED` `duplicate=true`, not `KEY_CONFLICT` (US5-AS2, FR-011) [FR-011, FR-015…FR-018, EC-010]
 - [ ] T050 [P] [US5] `tests/java/ds/banking/contract/CancelContractTest.java`: `POST /accounts/{id}/cancellations` status and body for every cancel row of contracts/http-api.md; invalid bodies → 400 [FR-015, FR-017, FR-018]
 - [ ] T051 [US5] `tests/java/ds/banking/integration/CancelIT.java`: client timeout 200 ms, 3 attempts, total 1,000 ms; rule `DELAY_BEFORE_EXECUTE`, `NEXT_N` count 3, `operation` `DEBIT`, `delay_ms` 2,000 → client result `UNKNOWN`; then cancel → `CANCELLED` with first cancel attempt `is_retry=false`; after the three delayed attempts finish (their log lines appear), each replays `CANCELLED` and the balance is unchanged (SC-007); crash at `AFTER_CANCEL_SWITCH` → next start sends the cancel, never the debit (FR-027); cancel of a key being sent right now is `REFUSED` (research R12); Invariants hold [SC-007, FR-021, FR-027]
 
 ### Implementation for User Story 5
 
-- [ ] T052 [US5] `DecisionService.cancel(...)` in the same `inImmediateTransaction` pattern — passes T049 [FR-011, FR-016, FR-017, FR-018]
+- [x] T052 [US5] `DecisionService.cancel(...)` in the same `inImmediateTransaction` pattern — passes T049 [FR-011, FR-016, FR-017, FR-018]
 - [ ] T053 [US5] `POST /accounts/{id}/cancellations` in `OperationHandler`, with the same parsing, fault hooks, status mapping and logging as debit — passes T050 [FR-015, FR-017, NFR-004]
 - [ ] T054 [US5] First add `CliTest` cases for `cancel` (including `REFUSED` → exit 4) and see them fail; then `ClientJournal.switchToCancel(key)` (one committed update: `operation := CANCEL`, `attempts := 0`, `state := PENDING`, allowed from `UNKNOWN` or a `PENDING` entry not being sent), `PaymentClient.cancel(account, key)` with the active-key guard, `ClientMain cancel` (switch first, then normal recovery) — passes T051 and the new `CliTest` cases [FR-021, FR-026, FR-027, research R12]
 

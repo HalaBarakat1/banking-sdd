@@ -5,8 +5,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import ds.banking.protocol.Answer;
+import ds.banking.protocol.CancelRequest;
+import ds.banking.protocol.DebitRequest;
 import ds.banking.protocol.Operation;
 import ds.banking.protocol.Outcome;
+import ds.banking.server.decision.Decider;
 import ds.banking.server.log.RequestLog;
 import ds.banking.server.store.RecordRow;
 import ds.banking.support.TestServer;
@@ -192,8 +196,16 @@ class DebitContractTest {
     @Test
     @DisplayName("FR-004: an unexpected server error is 500 with outcome UNAVAILABLE")
     void unexpectedErrorIs500() {
-        server = TestServer.start(dir, c -> c.withDecider(store -> (account, request) -> {
-            throw new IllegalStateException("simulated bug");
+        server = TestServer.start(dir, c -> c.withDecider(store -> new Decider() {
+            @Override
+            public Answer debit(String account, DebitRequest request) {
+                throw new IllegalStateException("simulated bug");
+            }
+
+            @Override
+            public Answer cancel(String account, CancelRequest request) {
+                throw new IllegalStateException("simulated bug");
+            }
         }));
         server.store().seedAccount("A", 1000);
 
