@@ -62,7 +62,8 @@ single serialization point.
   (HTTP 4xx business/validation errors such as insufficient funds, unknown account, stale key).
   Only retryable errors are retried; idempotency is what makes retrying a 5xx safe.
 - Exceptions MUST NOT be swallowed. Each one is either handled with a documented decision or
-  propagated. Server errors are returned as structured JSON with a machine-readable `code`.
+  propagated. Server errors are returned as structured JSON whose machine-readable code is the
+  `outcome` field.
 - When retries are exhausted, the client MUST report the transaction as `UNKNOWN` (not
   `FAILED`) and keep its key, so it can be safely resubmitted later with the same key. The
   account stays blocked for new transactions until that transaction is resolved.
@@ -73,6 +74,10 @@ Rationale: an at-least-once client is only safe if its retry behaviour is predic
 ### V. Test-First & Fault-Proven (NON-NEGOTIABLE)
 
 - For every task, tests are written first and MUST fail before the implementation is written.
+- Exception — verification tests: a test that checks behaviour already delivered by an earlier task
+  may pass on its first run. Its task MUST say so, and before committing it the test MUST be shown to
+  fail when that behaviour is deliberately broken (for example by temporarily removing the line that
+  provides it); the task states which break was used.
 - Every `FR-xxx` and every failure scenario `FS-1`…`FS-4` MUST have at least one automated test.
   The four fault scenarios are: request lost, server crash before execution, execution persisted
   but response lost, and response delayed past the client timeout.
@@ -90,8 +95,8 @@ Rationale: reliability claims are accepted only when a reproducible test demonst
 - Prefer the JDK over frameworks; every third-party dependency MUST be listed in this
   constitution (see Technology Stack).
 - Each server request MUST emit one structured log line containing: account id, sequence key,
-  `is_retry`, decision (`EXECUTED` / `DUPLICATE` / `REJECTED`), injected fault (if any), and
-  latency.
+  `is_retry`, decision (`EXECUTED` / `DUPLICATE` / `REJECTED`, or `DROPPED` when an injected fault
+  prevented any decision), injected fault (if any), and latency.
 - The fault injector MUST be disabled by default, configurable at runtime (per scenario and per
   request count or probability), and clearly separated from business logic.
 
@@ -109,6 +114,9 @@ parts and explicit logs make that possible.
 - Testing: JUnit 5 (`org.junit.jupiter`).
 - Logging: `java.util.logging` (no extra dependency).
 - No other runtime or test dependency may be added without amending this constitution.
+  Transitive dependencies of the listed artifacts (for example `slf4j-api` brought by
+  `sqlite-jdbc`, and the JUnit Platform modules) are allowed, but project code MUST NOT use them
+  directly.
 - Source layout: production code under `src/main/java`, tests under `tests/java` (the assignment's
   required `src/` and `tests/` folders); client, server, persistence, and fault-injection code live in
   separate packages.
@@ -137,4 +145,4 @@ parts and explicit logs make that possible.
 - Compliance is checked at every phase: plan's Constitution Check, `/speckit-analyze` before
   implementation, and review of every task commit against Principles I–VI.
 
-**Version**: 1.0.1 | **Ratified**: 2026-11-03 | **Last Amended**: 2026-11-03
+**Version**: 1.1.0 | **Ratified**: 2026-11-03 | **Last Amended**: 2026-11-03
