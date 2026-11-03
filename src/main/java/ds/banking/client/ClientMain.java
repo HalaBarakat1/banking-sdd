@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Set;
@@ -22,21 +23,23 @@ import java.util.Set;
  * (contracts/client-cli.md).
  *
  * <p>Implements: FR-022 (every retry limit is a flag), FR-024 and FR-025 (exit codes 3 for UNKNOWN
- * and 4 for REFUSED), and the read-only {@code journal} command. Output: attempt lines on standard
+ * and 4 for REFUSED), FR-026 ({@code debit} and {@code recover} first resend every unresolved entry),
+ * and the read-only {@code journal} command. Output: attempt lines on standard
  * error, one JSON line per result on standard output.
  */
 public final class ClientMain {
 
     private static final Set<String> OPTIONS = Set.of("url", "db", "connect-timeout-ms", "timeout-ms", "attempts",
             "max-total-ms", "backoff-ms", "max-backoff-ms");
-    private static final Set<String> COMMANDS = Set.of("debit", "journal");
+    private static final Set<String> COMMANDS = Set.of("debit", "recover", "journal");
 
     static final String USAGE = """
             Usage: java -jar banking-sdd.jar client [--url http://127.0.0.1:8080] [--db data/client.db]
                      [--connect-timeout-ms 1000] [--timeout-ms 2000] [--attempts 6] [--max-total-ms 30000]
                      [--backoff-ms 100] [--max-backoff-ms 2000] <command>
             Commands:
-              debit <account> <amount>   debit an amount (minor units) with retries
+              debit <account> <amount>   resend unresolved entries, then debit an amount (minor units)
+              recover                    resend every unresolved journal entry
               journal [account]          print journal entries (read-only)""";
 
     private ClientMain() {
@@ -87,6 +90,11 @@ public final class ClientMain {
                 }
                 requireAccount(arguments.get(0));
                 Args.parseNumber("amount", arguments.get(1), 1, Long.MAX_VALUE);
+            }
+            case "recover" -> {
+                if (!arguments.isEmpty()) {
+                    throw new UsageException("recover takes no arguments");
+                }
             }
             case "journal" -> {
                 if (arguments.size() > 1) {
@@ -150,6 +158,7 @@ public final class ClientMain {
             }
             return switch (options.command()) {
                 case "debit" -> debit(options, out, err);
+                case "recover" -> recover(options, out, err);
                 case "journal" -> journal(options, out);
                 default -> 2;
             };
@@ -159,12 +168,28 @@ public final class ClientMain {
         }
     }
 
+    /** Sending commands start by resending every unresolved entry (FR-026), then do their own work. */
     private static int debit(Options options, PrintStream out, PrintStream err) {
         PaymentClient client = PaymentClient.create(options.url(), options.database(), options.policy());
-        TransactionResult result = client.debit(options.arguments().get(0), Long.parseLong(options.arguments().get(1)));
-        err.println(result.result() + ": " + result.message());
-        out.println(new String(Json.write(resultJson(result)), StandardCharsets.UTF_8));
-        return exitCodeFor(List.of(result.result()));
+        List<TransactionResult> results = new ArrayList<>(client.recoverPending());
+        results.add(client.debit(options.arguments().get(0), Long.parseLong(options.arguments().get(1))));
+        return print(results, out, err);
+    }
+
+    private static int recover(Options options, PrintStream out, PrintStream err) {
+        PaymentClient client = PaymentClient.create(options.url(), options.database(), options.policy());
+        return print(client.recoverPending(), out, err);
+    }
+
+    /** One JSON line per result; the exit code covers all of them (contracts/client-cli.md). */
+    private static int print(List<TransactionResult> results, PrintStream out, PrintStream err) {
+        List<Result> outcomes = new ArrayList<>();
+        for (TransactionResult result : results) {
+            err.println(result.result() + ": " + result.message());
+            out.println(new String(Json.write(resultJson(result)), StandardCharsets.UTF_8));
+            outcomes.add(result.result());
+        }
+        return exitCodeFor(outcomes);
     }
 
     private static int journal(Options options, PrintStream out) {

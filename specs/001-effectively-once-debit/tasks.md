@@ -170,12 +170,12 @@ on the same `client.db`, check exactly one execution (spec, User Story 4).
 
 ### Tests for User Story 4 (write first, must fail)
 
-- [ ] T046 [US4] `tests/java/ds/banking/integration/ClientRecoveryIT.java`: crash after reserve, before any attempt is counted → restart resends with `is_retry=false`, executes once (US4-AS1); crash after the server executed, before the answer is recorded → restart resends with `is_retry=true`, gets `duplicate=true`, no second debit (US4-AS2); next new key after restart is greater than the reserved one (US4-AS3); an `UNKNOWN` entry whose journal already counts 6 attempts (the maximum) is resent with `is_retry=true` when a sending command starts and resolves, because the retry limits are per send run (FR-022); Invariants hold [FR-021, FR-022, FR-026, SC-005, EC-008]
+- [x] T046 [US4] `tests/java/ds/banking/integration/ClientRecoveryIT.java`: crash after reserve, before any attempt is counted → restart resends with `is_retry=false`, executes once (US4-AS1); crash after the server executed, before the answer is recorded → restart resends with `is_retry=true`, gets `duplicate=true`, no second debit (US4-AS2); next new key after restart is greater than the reserved one (US4-AS3); an `UNKNOWN` entry whose journal already counts 6 attempts (the maximum) is resent with `is_retry=true` when a sending command starts and resolves, because the retry limits are per send run (FR-022); Invariants hold [FR-021, FR-022, FR-026, SC-005, EC-008]
 
 ### Implementation for User Story 4
 
-- [ ] T047 [US4] `src/main/java/ds/banking/client/ClientHooks.java` (no-op by default; points `AFTER_RESERVE`, `AFTER_RESPONSE_BEFORE_RECORD`, `AFTER_CANCEL_SWITCH`) and the calls to it in `PaymentClient` [FR-026, research R9]
-- [ ] T048 [US4] First add `CliTest` cases for `recover` and its exit codes and see them fail; then `PaymentClient.recoverPending()` resending every `PENDING` / `UNKNOWN` entry with its current operation, FR-021 `is_retry`, and fresh per-run limits; `ClientMain` runs it before `debit` and adds `recover` — passes T046 and the new `CliTest` cases [FR-021, FR-022, FR-026]
+- [x] T047 [US4] `src/main/java/ds/banking/client/ClientHooks.java` (no-op by default; points `AFTER_RESERVE`, `AFTER_RESPONSE_BEFORE_RECORD`, `AFTER_CANCEL_SWITCH`) and the calls to it in `PaymentClient` [FR-026, research R9]
+- [x] T048 [US4] First add `CliTest` cases for `recover` and its exit codes and see them fail; then `PaymentClient.recoverPending()` resending every `PENDING` / `UNKNOWN` entry with its current operation, FR-021 `is_retry`, and fresh per-run limits; `ClientMain` runs it before `debit` and adds `recover` — passes T046 and the new `CliTest` cases [FR-021, FR-022, FR-026]
 
 **Checkpoint**: Effectively-once holds end to end, including client crashes.
 

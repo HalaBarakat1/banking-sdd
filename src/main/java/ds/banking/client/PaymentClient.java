@@ -7,6 +7,8 @@ import ds.banking.protocol.Outcome;
 import java.net.URI;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -18,7 +20,8 @@ import java.util.Optional;
  * is sent, and {@code is_retry} is true exactly when an earlier attempt was counted), FR-022 (backoff
  * between attempts; the run stops at its attempt limit or total deadline), FR-023 (a final answer ends
  * the run and is recorded), FR-024 (an exhausted run is {@code UNKNOWN}, never "failed", and keeps its
- * key), FR-025 (a second unresolved transaction on an account is refused locally), NFR-004 (one log
+ * key), FR-025 (a second unresolved transaction on an account is refused locally), FR-026 (unresolved
+ * entries are resent by {@link #recoverPending()}), NFR-004 (one log
  * line per attempt).
  *
  * <p>Thread safety: the journal serializes state changes in its database; the other fields are
@@ -32,15 +35,23 @@ public final class PaymentClient {
     private final Backoff backoff;
     private final Sleeper sleeper;
     private final Clock clock;
+    private final ClientHooks hooks;
 
     public PaymentClient(ClientJournal journal, BankingHttpClient http, RetryPolicy policy, Backoff backoff,
             Sleeper sleeper, Clock clock) {
+        this(journal, http, policy, backoff, sleeper, clock, ClientHooks.NONE);
+    }
+
+    /** As above, with crash hooks for tests (research R9). */
+    public PaymentClient(ClientJournal journal, BankingHttpClient http, RetryPolicy policy, Backoff backoff,
+            Sleeper sleeper, Clock clock, ClientHooks hooks) {
         this.journal = journal;
         this.http = http;
         this.policy = policy;
         this.backoff = backoff;
         this.sleeper = sleeper;
         this.clock = clock;
+        this.hooks = hooks;
     }
 
     /** A client with real time, real sleeping and random jitter. */
@@ -61,7 +72,24 @@ public final class PaymentClient {
             return TransactionResult.refused(accountId,
                     "account " + accountId + " has an unresolved transaction; resolve it first");
         }
+        hooks.at(ClientHooks.Point.AFTER_RESERVE, reserved.get());
         return send(reserved.get());
+    }
+
+    /**
+     * Resends every unresolved ({@code PENDING} or {@code UNKNOWN}) journal entry with its current
+     * operation, in key order, each in a fresh send run (FR-022, FR-026). {@code is_retry} follows the
+     * durable attempt counter (FR-021): an entry interrupted before its first attempt was counted is sent
+     * with {@code is_retry = false}, any other with {@code true}.
+     */
+    public List<TransactionResult> recoverPending() {
+        List<TransactionResult> results = new ArrayList<>();
+        for (JournalEntry entry : journal.unresolved()) {
+            ClientLog.note("op=" + entry.operation() + " account=" + entry.accountId() + " key="
+                    + entry.sequenceKey() + " recovering state=" + entry.state() + " attempts=" + entry.attempts());
+            results.add(send(entry));
+        }
+        return results;
     }
 
     /** One send run for a journal entry, with fresh attempt and time limits (FR-022). */
@@ -74,6 +102,7 @@ public final class PaymentClient {
             run.attempted();
             ClientLog.attempt(entry.operation(), entry.accountId(), key, run.attempts(), isRetry, result);
             if (result instanceof AttemptResult.Final done) {
+                hooks.at(ClientHooks.Point.AFTER_RESPONSE_BEFORE_RECORD, entry);
                 return finish(entry, done, run.attempts());
             }
             Duration wait = backoff.delayAfter(run.attempts());
