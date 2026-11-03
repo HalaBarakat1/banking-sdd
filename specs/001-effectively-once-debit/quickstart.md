@@ -8,7 +8,8 @@ How to prove the feature works end to end. Endpoint and field details are in
 ## Prerequisites
 
 - JDK 21 on `PATH` (`java -version`). Maven is **not** needed: the wrapper downloads it.
-- Free port 8080 (or pass `--port`).
+- Free port 8080 (or pass `--port`). The server listens on 127.0.0.1 only, so use that address rather
+  than `localhost`, which Windows may resolve to the IPv6 address `::1` first.
 - Windows: use `mvnw.cmd`; macOS/Linux: `./mvnw`.
 
 ## 1. Automated validation (the main proof)
@@ -54,7 +55,7 @@ java -jar target/banking-sdd.jar server --port 8080 --db data/bank.db --seed A=1
 In a second terminal, lose the next response (FS-3) and send one debit:
 
 ```bash
-curl -X PUT http://localhost:8080/admin/faults -H "Content-Type: application/json" -d "{\"rules\":[{\"scenario\":\"DROP_RESPONSE\",\"trigger\":\"NEXT_N\",\"count\":1}]}"
+curl -X PUT http://127.0.0.1:8080/admin/faults -H "Content-Type: application/json" -d "{\"rules\":[{\"scenario\":\"DROP_RESPONSE\",\"trigger\":\"NEXT_N\",\"count\":1}]}"
 ```
 
 ```bash
@@ -67,7 +68,7 @@ Expected client output: attempt 1 fails with no response, attempt 2 returns
 Check the server state:
 
 ```bash
-curl http://localhost:8080/accounts/A
+curl http://127.0.0.1:8080/accounts/A
 ```
 
 Expected: `"balance":900,"last_sequence_key":1`. The server log shows `decision=EXECUTED
@@ -80,7 +81,7 @@ timeout). In every case the balance drops by exactly 100 per debit.
 Turn faults off:
 
 ```bash
-curl -X DELETE http://localhost:8080/admin/faults
+curl -X DELETE http://127.0.0.1:8080/admin/faults
 ```
 
 ## 3. Clean state

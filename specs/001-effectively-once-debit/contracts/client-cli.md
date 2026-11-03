@@ -29,7 +29,7 @@ java -jar target/banking-sdd.jar server [--port 8080] [--db data/bank.db] [--thr
 ## Client (Order Service)
 
 ```text
-java -jar target/banking-sdd.jar client [--url http://localhost:8080] [--db data/client.db]
+java -jar target/banking-sdd.jar client [--url http://127.0.0.1:8080] [--db data/client.db]
         [--connect-timeout-ms 1000] [--timeout-ms 2000] [--attempts 6] [--max-total-ms 30000]
         [--backoff-ms 100] [--max-backoff-ms 2000] <command>
 ```
