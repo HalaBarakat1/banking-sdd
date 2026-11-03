@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.cfg.CoercionAction;
 import com.fasterxml.jackson.databind.cfg.CoercionInputShape;
 import com.fasterxml.jackson.databind.exc.MismatchedInputException;
+import com.fasterxml.jackson.databind.exc.ValueInstantiationException;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.type.LogicalType;
@@ -76,11 +77,27 @@ public final class Json {
 
     /** Parses a body into {@code type} with the strict rules: no unknown, missing or null fields. */
     public static <T> T parseStrict(byte[] body, Class<T> type) throws InvalidRequestException {
+        return read(STRICT, body, type);
+    }
+
+    /**
+     * Parses a body whose fields are optional (fault rules, contracts/http-api.md §4): missing fields
+     * become {@code null}, but unknown fields, floats for integers and strings for numbers are still
+     * refused. Validation in the target's constructor is reported as an {@link InvalidRequestException}.
+     */
+    public static <T> T parse(byte[] body, Class<T> type) throws InvalidRequestException {
+        return read(MAPPER.reader(), body, type);
+    }
+
+    private static <T> T read(ObjectReader reader, byte[] body, Class<T> type) throws InvalidRequestException {
         if (body == null || body.length == 0) {
             throw new InvalidRequestException("request body is empty");
         }
         try {
-            return STRICT.forType(type).readValue(body);
+            return reader.forType(type).readValue(body);
+        } catch (ValueInstantiationException e) {
+            Throwable cause = e.getCause() == null ? e : e.getCause();
+            throw new InvalidRequestException("invalid request body: " + cause.getMessage(), e);
         } catch (MismatchedInputException e) {
             throw new InvalidRequestException(describe(e), e);
         } catch (JacksonException e) {
