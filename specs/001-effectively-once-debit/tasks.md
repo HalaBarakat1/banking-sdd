@@ -113,7 +113,7 @@ once and both answers are the same answer (spec, User Story 1).
 - [x] T032 [US1] `src/main/java/ds/banking/client/BankingHttpClient.java`: one attempt, classification of research R4 — passes T024 [FR-004, FR-022]
 - [x] T033 [US1] `src/main/java/ds/banking/client/PaymentClient.java` `debit(account, amount)` and `TransactionResult.java`: reserve → loop with a **per-run** attempt counter and deadline that start fresh on every send run (`countAttempt` committed before send and used only for `is_retry = previous count > 0`; backoff within the run's deadline) → `resolve` or `markUnknown`; local `REFUSED`; attempt logging — passes T025, T027 [FR-021…FR-025, NFR-004]
 - [x] T034 [US1] `src/main/java/ds/banking/server/ServerMain.java`, `src/main/java/ds/banking/client/ClientMain.java` (`debit`, `journal`) and `Main` dispatch per contracts/client-cli.md — passes T026 [FR-022, FR-025, FR-031]
-- [ ] T035 [US1] `tests/java/ds/banking/unit/ArchitectureTest.java` **(verification)**: no file in `server/decision` or `server/store` imports `ds.banking.server.http` or `ds.banking.server.fault`, and no file in `client` imports `ds.banking.server`. Break used: a temporary forbidden import in `DecisionService` [NFR-005]
+- [x] T035 [US1] `tests/java/ds/banking/unit/ArchitectureTest.java` **(verification)**: no file in `server/decision` or `server/store` imports `ds.banking.server.http` or `ds.banking.server.fault`, and no file in `client` imports `ds.banking.server`. Break used: a temporary forbidden import in `DecisionService` [NFR-005]
 
 **Checkpoint**: MVP — `mvnw verify` green; manual `client debit` works against `server`.
 
