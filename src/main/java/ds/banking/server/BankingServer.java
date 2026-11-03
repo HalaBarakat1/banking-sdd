@@ -4,6 +4,7 @@ import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 import ds.banking.server.decision.Decider;
 import ds.banking.server.decision.DecisionService;
+import ds.banking.server.fault.FaultInjector;
 import ds.banking.server.http.AccountQueryHandler;
 import ds.banking.server.http.AdminHandler;
 import ds.banking.server.http.HttpIo;
@@ -83,6 +84,7 @@ public final class BankingServer implements AutoCloseable {
     private final LedgerStore store;
     private final HttpServer http;
     private final ExecutorService pool;
+    private final FaultInjector faults = new FaultInjector();
 
     private BankingServer(Config config) throws IOException {
         this.config = config;
@@ -92,7 +94,8 @@ public final class BankingServer implements AutoCloseable {
         this.pool = Executors.newFixedThreadPool(config.threads(), threadFactory());
         http.setExecutor(pool);
         HttpHandler query = new AccountQueryHandler(store);
-        HttpHandler operations = new OperationHandler(config.deciders().apply(store));
+        // FS-2 crash-restart is added in T042; until then a crash only drops the request.
+        HttpHandler operations = new OperationHandler(config.deciders().apply(store), faults, downtime -> { });
         http.createContext("/", exchange -> HttpIo.sendMessage(exchange, 404,
                 "no such endpoint: " + exchange.getRequestMethod() + " " + exchange.getRequestURI().getPath()));
         http.createContext("/accounts/", guarded(exchange -> {
@@ -104,7 +107,7 @@ public final class BankingServer implements AutoCloseable {
                 HttpIo.sendMessage(exchange, 405, "method not allowed: " + exchange.getRequestMethod());
             }
         }));
-        http.createContext("/admin/", guarded(new AdminHandler(store)));
+        http.createContext("/admin/", guarded(new AdminHandler(store, faults)));
         http.start();
     }
 
@@ -168,6 +171,11 @@ public final class BankingServer implements AutoCloseable {
 
     public Config config() {
         return config;
+    }
+
+    /** The fault injector; empty unless configured through /admin/faults (FR-030). */
+    public FaultInjector faults() {
+        return faults;
     }
 
     public LedgerStore store() {
