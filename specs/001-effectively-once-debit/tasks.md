@@ -46,7 +46,7 @@ retry); US2–US5 build on it (see Dependencies).
 
 **Purpose**: A project that builds and runs an empty test suite with one command.
 
-- [ ] T001 Add Maven Wrapper 3.3.2 pinned to Maven 3.9.9: `mvnw`, `mvnw.cmd`, `.mvn/wrapper/maven-wrapper.properties` [SC-002, research R10]
+- [x] T001 Add Maven Wrapper 3.3.2 pinned to Maven 3.9.9: `mvnw`, `mvnw.cmd`, `.mvn/wrapper/maven-wrapper.properties` [SC-002, research R10]
 - [ ] T002 Create `pom.xml`: Java 21, `sqlite-jdbc 3.47.1.0`, `jackson-databind 2.18.2`, test `junit-jupiter 5.11.3`, `<testSourceDirectory>tests/java</testSourceDirectory>`, Surefire 3.5.2 running `*Test` and `*IT` with tag filtering (`-Dgroups=`), Shade 3.6.0 producing `target/banking-sdd.jar` with main class `ds.banking.Main` [SC-002, research R10]
 - [ ] T003 [P] Add `.gitignore` (`target/`, `data/`, `*.db`, `*.db-wal`, `*.db-shm`) and `.gitattributes` (`* text=auto eol=lf`, `mvnw.cmd eol=crlf`) [NFR-001: runtime databases stay out of the repository]
 - [ ] T004 Create `src/main/java/ds/banking/Main.java` printing usage for `server` / `client` and exiting `2` on unknown sub-commands, with smoke test `tests/java/ds/banking/unit/BuildSmokeTest.java` written first; `mvnw.cmd verify` passes [SC-002, contracts/client-cli.md]
