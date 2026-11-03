@@ -4,7 +4,7 @@
 
 **Created**: 2026-11-03
 
-**Status**: Draft
+**Status**: Implemented (all 58 tasks in tasks.md done; 331 tests green)
 
 **Input**: User description: "Track 1 — Fault-Tolerant Distributed Banking Transaction. An Order Service
 (client) asks a Banking Service (server) over the network to debit an amount from a user's account. The

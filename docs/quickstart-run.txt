@@ -1,4 +1,4 @@
-Manual quickstart run (T058) - 2026-11-04, Windows 11, Java 21, built from commit 687d853
+Manual quickstart run (T058) - 2026-11-04, Windows 11, Java 21, jar built from commit dc5b3f3 (no code changes up to 687d853, which only adds README.md and ticks T057 in tasks.md)
 Server: java -jar target/banking-sdd.jar server --port 8080 --db data/bank.db --seed A=1000
 Five debits of 100 from A, each under one fault scenario, then a cancel of a debit stuck at the server.
 
