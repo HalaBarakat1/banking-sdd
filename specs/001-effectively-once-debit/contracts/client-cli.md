@@ -30,9 +30,10 @@ java -jar target/banking-sdd.jar client [--url http://localhost:8080] [--db data
 | `recover` | resend every unresolved journal entry | US4, FR-026 |
 | `journal [account]` | print journal entries | inspection |
 
-`debit` and `recover` first resend every unresolved entry, as FR-026 requires on start. `cancel`
-skips the resend of the entry it is cancelling (otherwise it would re-send the very debit the user
-wants to stop) and `journal` only reads.
+`debit`, `cancel` and `recover` resend every unresolved entry, as FR-026 requires on start.
+`cancel` first saves the switch of that entry from `DEBIT` to `CANCEL` in the journal (FR-027), and
+only then runs recovery, which therefore sends the cancel, never the old debit. If the client crashes
+in between, the next start of any command resends the cancel. `journal` only reads.
 
 Example final line:
 

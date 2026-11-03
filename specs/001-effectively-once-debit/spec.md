@@ -46,6 +46,14 @@ configurable fault injector covering four failure scenarios."
   not a `KEY_CONFLICT`. FR-011 now limits conflicts to a debit with a different amount.
 - FR-026 conflicted with FR-027: resending every unresolved entry on start would re-send a debit the
   user is about to cancel. FR-026 now excludes that entry.
+
+### Amendment 2026-11-03 (found while reviewing the previous amendment)
+
+- Excluding the cancelled entry from recovery kept the user's cancel only in memory for one run: a
+  client crash before the cancel was sent left the journal saying "debit", and the next start resent
+  that debit. FR-026 is restored to "resend every unresolved transaction", and FR-027 now requires the
+  switch from debit to cancel to be saved in the journal before anything is sent for that key, so
+  recovery always resends the user's latest intention.
 - FR-003 now names the two cancel-only outcomes so every outcome is listed in one place.
 
 ## User Scenarios & Testing *(mandatory)*
@@ -278,9 +286,11 @@ the balance is unchanged.
 - **FR-025**: The client MUST refuse to start a new transaction on an account that has an unresolved
   (`PENDING` or `UNKNOWN`) transaction (EC-009).
 - **FR-026**: On start, the client MUST resend every unresolved transaction as a retry, using its stored
-  key, operation and amount, except an entry the user started the client to cancel (FR-027).
-- **FR-027**: Once the client asks to cancel an unresolved debit, the recorded operation for that key
-  MUST become cancel, and the client MUST never send that debit again.
+  key, operation and amount.
+- **FR-027**: When the user asks to cancel an unresolved debit, the client MUST first durably change the
+  recorded operation for that key from debit to cancel (state `PENDING`), before any request for that
+  key is sent, including start-up recovery (FR-026). From then on the client MUST never send that debit
+  again; recovery resends the cancel instead.
 
 **Fault injection**
 

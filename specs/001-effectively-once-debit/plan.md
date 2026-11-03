@@ -204,7 +204,10 @@ Found while planning; to be committed **before** `tasks.md` (constitution Princi
    debit record; a debit copy of a cancelled key replays `CANCELLED` (FR-008). Also list
    `ALREADY_EXECUTED` and `ALREADY_REJECTED` in FR-003 so all outcomes are in one place.
 2. **Spec FR-026 contradicts FR-027.** "On start, resend every unresolved transaction" would re-send
-   the debit a user is starting the client to cancel. Fix: FR-026 excludes the entry being cancelled.
+   the debit a user is starting the client to cancel. First fix: FR-026 excludes the entry being
+   cancelled. Review of that fix found it lost the cancel if the client crashed before sending it.
+   Final fix: FR-027 saves the switch to cancel in the journal before anything is sent, and FR-026
+   keeps resending every unresolved entry with its current operation.
 3. **Constitution v1.0.1 (PATCH).** Technology Stack says tests live in `src/test/java`; the
    assignment's deliverables require a `tests/` folder. Change to `tests/java`.
 

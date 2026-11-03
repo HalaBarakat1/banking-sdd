@@ -171,8 +171,9 @@ document decides how to use it.
 
 - **Decision**: The client keeps an in-memory set of keys it is currently sending. `cancel(key)` is
   allowed only for a journal entry that is unresolved **and** not being sent right now (an `UNKNOWN`
-  entry, or a `PENDING` entry found after restart). Switching the entry's operation to `CANCEL` and
-  sending the cancel use the same retry loop as a debit.
+  entry, or a `PENDING` entry found after restart). The switch of the entry's operation to `CANCEL` is
+  committed to the journal first; the cancel is then sent by the same retry loop (and the same
+  recovery path) as a debit.
 - **Rationale**: Prevents two threads of one client from sending a debit and a cancel for the same key at
   once, which would make the client's own view ambiguous. The server is safe either way (the first
   decision wins); this rule keeps the client's journal consistent (FR-027).

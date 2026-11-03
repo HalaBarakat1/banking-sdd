@@ -113,7 +113,9 @@ same transaction, then commit before the answer is written (FR-013).
 ```
 
 - A `PENDING` entry found at start-up was interrupted by a client crash; it is resent with
-  `is_retry = true` (it may or may not have reached the server).
+  `is_retry = true` (it may or may not have reached the server), using its current `operation`.
+- The switch `DEBIT` → `CANCEL` is a single journal update committed **before** anything is sent for
+  that key (FR-027), so recovery always sends the latest intention, never an outdated debit.
 - Client-side result of a resolved entry:
 
 | Operation | Server outcome | Client result |
