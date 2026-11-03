@@ -46,6 +46,7 @@ configurable fault injector covering four failure scenarios."
   not a `KEY_CONFLICT`. FR-011 now limits conflicts to a debit with a different amount.
 - FR-026 conflicted with FR-027: resending every unresolved entry on start would re-send a debit the
   user is about to cancel. FR-026 now excludes that entry.
+- FR-003 now names the two cancel-only outcomes so every outcome is listed in one place.
 
 ### Amendment 2026-11-03 (found while reviewing the previous amendment)
 
@@ -54,7 +55,23 @@ configurable fault injector covering four failure scenarios."
   that debit. FR-026 is restored to "resend every unresolved transaction", and FR-027 now requires the
   switch from debit to cancel to be saved in the journal before anything is sent for that key, so
   recovery always resends the user's latest intention.
-- FR-003 now names the two cancel-only outcomes so every outcome is listed in one place.
+
+### Amendment 2026-11-03 (found by /speckit-analyze)
+
+- FR-022 and NFR-003 add the connect limit and the total time limit the constitution requires
+  (Principle IV); retries stop at whichever of attempts or total time comes first.
+- FR-021 defines `is_retry` from a durable attempt counter, so a first cancel attempt is not marked as a
+  retry and recovery only marks requests that may really have been sent before.
+- FR-008 defines "the same answer" (equal outcome, amount and balance after; one `duplicate = false`),
+  and EC-003 no longer calls a debit on a cancelled key a conflict.
+- FR-012 forbids rounding or defaulting values: `"amount": 2.5` must be invalid, never a debit of 2.
+- FR-026 applies to commands that send; FR-029 adds an operation filter, one scenario per request,
+  and fault configuration that survives an FS-2 restart.
+- Assumptions record that accounts exist before clients use them, because `UNKNOWN_ACCOUNT` is not a
+  decision.
+- FR-022 states that the attempt and time limits apply per send run (each command or recovery pass
+  starts them fresh). Otherwise an `UNKNOWN` entry, whose durable counter already reached the
+  maximum, could never be resent; the durable counter of FR-021 decides only `is_retry`.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -67,7 +84,7 @@ happens on the network, the account is debited once, and the Order Service ends 
 **Why this priority**: This is the core guarantee of the assignment. Without it nothing else has value.
 
 **Independent Test**: Seed an account, send one debit with no faults, then send the same request again
-as a retry; check that the balance dropped once and both answers are identical.
+as a retry; check that the balance dropped once and both answers are the same answer (FR-008).
 
 **Acceptance Scenarios**:
 
@@ -154,7 +171,8 @@ a new client on the same records and check the transaction resolves with exactly
 **Acceptance Scenarios**:
 
 1. **Given** the client recorded a pending debit with key 7 and crashed before sending it, **When** it
-   restarts, **Then** it sends key 7 as a retry, the debit executes once, and the record is resolved.
+   restarts, **Then** it resends key 7 (with `is_retry` set as FR-021 defines), the debit executes once,
+   and the record is resolved.
 2. **Given** the debit with key 7 was executed but the client crashed before reading the answer,
    **When** it restarts and resends key 7, **Then** it receives the original answer as a duplicate and no
    second debit happens.
@@ -193,8 +211,10 @@ the balance is unchanged.
   attempt was lost (FS-1). It is treated as new and executed; the flag never decides the outcome.
 - **EC-002** A request arrives with `is_retry = false` but a key that was already decided (for example a
   client bug or a network-level duplicate). It is treated as a duplicate; no money moves.
-- **EC-003** A copy of a decided key arrives with a different amount or a different operation than the
+- **EC-003** A debit copy of a key decided by a debit arrives with a different amount than the
   original. It is rejected as a key conflict; no money moves and the original decision stands.
+  (A debit copy of a cancelled key replays `CANCELLED`, and a cancel of a decided debit answers per
+  FR-017; neither is a conflict.)
 - **EC-004** The amount is zero, negative, or not a whole number of minor units. The request is rejected
   as invalid and does not consume the key.
 - **EC-005** The account does not exist. The request is rejected as unknown account and does not consume
@@ -243,7 +263,10 @@ the balance is unchanged.
 - **FR-007**: The check of the key, the balance change, the last-key update and the transaction record
   MUST happen as one indivisible step: either all of them take effect or none does.
 - **FR-008**: When a request's key already has a transaction record, the server MUST NOT move money and
-  MUST reply with the recorded outcome marked `duplicate = true`.
+  MUST reply with the recorded outcome marked `duplicate = true`, except as FR-011 (conflict) and
+  FR-017 (cancel of a decided key) define. "The same answer" means equal outcome, amount and balance
+  after; among all copies of a key exactly one answer, the one that made the decision, has
+  `duplicate = false`.
 - **FR-009**: When a request's key is smaller than the last key and has no transaction record, the
   server MUST reply `STALE_KEY` and MUST NOT move money. Such a key can never execute later.
 - **FR-010**: The server MUST decide using stored state only; the `is_retry` flag MUST NOT change the
@@ -252,7 +275,8 @@ the balance is unchanged.
   the server MUST reply `KEY_CONFLICT` and MUST NOT change anything. A debit copy of a key burnt by a
   cancel is not a conflict: it replays `CANCELLED` (FR-008, User Story 5).
 - **FR-012**: Invalid requests (EC-004) and unknown accounts (EC-005) MUST be rejected without consuming
-  a key and without changing anything.
+  a key and without changing anything. These rejections are not decisions: no transaction record is
+  written. Fractional, non-numeric or missing values are invalid; they are never rounded or defaulted.
 - **FR-013**: The server MUST send a success answer only after the decision is durably saved.
 - **FR-014**: A balance MUST never become negative.
 
@@ -274,19 +298,26 @@ the balance is unchanged.
   twice, even across client restarts. The next key MUST be durably reserved before the request is sent.
 - **FR-020**: Before sending, the client MUST durably record the pending transaction (account, key,
   operation, amount, state `PENDING`).
-- **FR-021**: The first attempt MUST be sent with `is_retry = false`; every later attempt of the same
-  transaction MUST reuse the same key and amount with `is_retry = true`.
-- **FR-022**: Each attempt MUST have a time limit. On a retryable outcome the client MUST wait before the
-  next attempt, with the wait growing exponentially and including a random component, up to a maximum
-  wait. Attempts MUST be limited by a maximum count. All these values MUST be configurable.
+- **FR-021**: Every attempt of a transaction MUST reuse the same key and amount. The client MUST durably
+  count each attempt of the current operation before sending it; `is_retry` is `true` exactly when an
+  earlier attempt of the same operation for that key was counted (so the first debit attempt, and the
+  first cancel attempt after a switch, are sent with `is_retry = false`, also when sent by recovery).
+- **FR-022**: Each attempt MUST have a connect time limit and a response time limit. On a retryable
+  outcome the client MUST wait before the next attempt, with the wait growing exponentially and
+  including a random component, up to a maximum wait. Retrying MUST stop at a maximum number of
+  attempts or a maximum total time, whichever comes first. Both limits apply to one send run (a
+  command, or one recovery pass over an entry) and start fresh on each run, so an `UNKNOWN`
+  transaction can always be resent later; the durable attempt count of FR-021 is used only for
+  `is_retry`. All these values MUST be configurable.
 - **FR-023**: On a final outcome the client MUST stop retrying, record the outcome, and report it. An
   `EXECUTED` answer (duplicate or not) means success.
 - **FR-024**: When retries are exhausted, the client MUST record and report the transaction as `UNKNOWN`
   and keep its key for a later resend or cancel.
 - **FR-025**: The client MUST refuse to start a new transaction on an account that has an unresolved
   (`PENDING` or `UNKNOWN`) transaction (EC-009).
-- **FR-026**: On start, the client MUST resend every unresolved transaction as a retry, using its stored
-  key, operation and amount.
+- **FR-026**: Whenever the client starts in order to send requests (any command that sends), it MUST
+  first resend every unresolved transaction, using its stored key, operation and amount, with
+  `is_retry` as FR-021 defines. Read-only commands do not send.
 - **FR-027**: When the user asks to cancel an unresolved debit, the client MUST first durably change the
   recorded operation for that key from debit to cancel (state `PENDING`), before any request for that
   key is sent, including start-up recovery (FR-026). From then on the client MUST never send that debit
@@ -299,8 +330,10 @@ the balance is unchanged.
   save, then do not deliver the response; `FS-4a` delay before executing; `FS-4b` delay after executing.
   The delay length MUST be configurable.
 - **FR-029**: Each scenario MUST be enabled either for the next N requests or with a probability, and
-  optionally only for a given account. Configuration MUST be changeable while the server runs, without a
-  restart, and invalid configuration MUST be refused (EC-012).
+  optionally only for a given account and/or operation (debit or cancel). A request triggers at most
+  one scenario; the probabilities of rules that can match the same request MUST add up to at most 1.
+  Configuration MUST be changeable while the server runs, without a restart, MUST survive an FS-2
+  crash-restart, and invalid configuration MUST be refused (EC-012).
 - **FR-030**: The fault injector MUST be off by default and MUST NOT change any decision rule; it only
   drops, stops or delays.
 
@@ -316,11 +349,11 @@ the balance is unchanged.
 - **NFR-002 Concurrency**: The server MUST process requests for different accounts in parallel and stay
   correct with at least 50 simultaneous requests, including simultaneous copies of the same key.
 - **NFR-003 Bounded waiting**: With default settings the client MUST reach a final outcome or `UNKNOWN`
-  within 30 seconds. Defaults: 2 s per attempt, 6 attempts, waits starting at 100 ms, doubling, capped at
-  2 s, with random jitter.
+  within 30 seconds. Defaults: connect limit 1 s, response limit 2 s per attempt, 6 attempts, total
+  limit 30 s, waits starting at 100 ms, doubling, capped at 2 s, with random jitter.
 - **NFR-004 Observability**: The server MUST write one log line per request with: account, key,
-  `is_retry`, decision (`EXECUTED` / `DUPLICATE` / `REJECTED`), outcome, injected fault (if any) and
-  processing time. The client MUST log every attempt and its result.
+  `is_retry`, decision (`EXECUTED` / `DUPLICATE` / `REJECTED`, or `DROPPED` when an injected fault
+  prevented any decision), outcome, injected fault (if any) and processing time. The client MUST log every attempt and its result.
 - **NFR-005 Isolation of faults**: Fault injection code MUST be separate from the decision rules and
   must be removable without changing them.
 
@@ -352,13 +385,14 @@ most one transaction record.
   double debits and zero lost debits among transactions the client reported as executed.
 - **SC-002**: Each of FS-1, FS-2, FS-3, FS-4a and FS-4b has a repeatable automated test that passes on
   every run.
-- **SC-003**: 50 simultaneous copies of one debit produce exactly 1 execution and 50 identical answers.
+- **SC-003**: 50 simultaneous copies of one debit produce exactly 1 execution and 50 copies of the same
+  answer (FR-008), exactly one of them with `duplicate = false`.
 - **SC-004**: After the server is stopped and restarted, 100% of previously answered decisions are still
   present and are replayed unchanged.
 - **SC-005**: After the client is stopped mid-transaction and restarted, 100% of pending transactions
   resolve with exactly one execution or a recorded cancellation.
 - **SC-006**: With default settings, every client transaction reaches a final outcome or `UNKNOWN` within
-  30 seconds.
+  30 seconds (the NFR-003 bound, measured end to end).
 - **SC-007**: A cancelled key followed by a late copy of its debit leaves the balance unchanged in 100%
   of trials.
 
@@ -370,6 +404,9 @@ most one transaction record.
 - Money is expressed as whole minor units (for example cents) to avoid rounding.
 - Accounts are created with a starting balance for testing and demonstration; account opening, deposits,
   refunds and transfers are out of scope.
+- Accounts are seeded before any client sends requests for them and are never created while such
+  requests may still be in flight. Otherwise a delayed copy of a request first answered
+  `UNKNOWN_ACCOUNT` could execute later, giving one key two different answers.
 - Client and server trust each other; authentication and encryption are out of scope.
 - Clocks of client and server are not trusted or compared; no decision depends on time of day.
 - A cancel that arrives after the debit executed cannot undo it; a refund would need a credit
