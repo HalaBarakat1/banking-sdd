@@ -1,6 +1,9 @@
 package ds.banking;
 
+import ds.banking.client.ClientMain;
+import ds.banking.server.ServerMain;
 import java.io.PrintStream;
+import java.util.Arrays;
 
 /**
  * Entry point of {@code banking-sdd.jar}: dispatches to the {@code server} and {@code client}
@@ -36,9 +39,15 @@ public final class Main {
             err.print(USAGE);
             return EXIT_INVALID_ARGUMENTS;
         }
-        String command = args[0];
-        err.println("Unknown sub-command: " + command);
-        err.print(USAGE);
-        return EXIT_INVALID_ARGUMENTS;
+        String[] rest = Arrays.copyOfRange(args, 1, args.length);
+        return switch (args[0]) {
+            case "server" -> ServerMain.run(rest, out, err);
+            case "client" -> ClientMain.run(rest, out, err);
+            default -> {
+                err.println("Unknown sub-command: " + args[0]);
+                err.print(USAGE);
+                yield EXIT_INVALID_ARGUMENTS;
+            }
+        };
     }
 }
