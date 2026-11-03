@@ -33,7 +33,9 @@ only exchange the messages in [contracts/http-api.md](contracts/http-api.md).
 
 - **Primary key** `(account_id, sequence_key)`: a key has at most one record, ever (spec: Key
   Entities; research R2 second line of defence).
-- `CHECK ((operation = 'DEBIT' AND amount > 0) OR (operation = 'CANCEL' AND amount IS NULL))`
+- `CHECK ((operation = 'DEBIT' AND amount IS NOT NULL AND amount > 0) OR (operation = 'CANCEL' AND amount IS NULL))`
+  (`amount IS NOT NULL` matters: in SQL `NULL > 0` is unknown, and a CHECK only rejects a row when its
+  condition is false, so without it a DEBIT with no amount would pass.)
 - `CHECK ((operation = 'CANCEL') = (outcome = 'CANCELLED'))`
 - Records are insert-only: never updated, never deleted.
 
