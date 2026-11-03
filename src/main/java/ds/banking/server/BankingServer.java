@@ -19,6 +19,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.logging.Level;
@@ -29,10 +30,13 @@ import java.util.logging.Logger;
  *
  * <p>Implements: NFR-002 (a fixed pool of worker threads serves requests in parallel; research R1),
  * NFR-001 (all money state lives in the database file, so a new server on the same file continues
- * where the old one stopped), research R11 (rebinding the same port is retried for up to 2 s).
+ * where the old one stopped), FR-028 FS-2 ({@link #crashAndRestart}), research R11 (rebinding the
+ * same port is retried for up to 2 s).
  *
- * <p>Thread safety: the fields are written once in the constructor and read afterwards; requests are
- * handled by the pool threads and share only the stateless {@link LedgerStore}.
+ * <p>Thread safety: the current {@code Running} value is replaced only under the {@code lifecycle} lock
+ * and published through a volatile field; the restart is single-flight through an
+ * {@link AtomicBoolean}. Requests share only the stateless {@link LedgerStore} and the thread-safe
+ * {@link FaultInjector}.
  */
 public final class BankingServer implements AutoCloseable {
 
@@ -80,22 +84,37 @@ public final class BankingServer implements AutoCloseable {
         }
     }
 
+    /**
+     * Everything a real process crash would lose: the listener, its worker threads, the store object
+     * and the handlers. Money state is not here; it is in the database file.
+     */
+    private record Running(HttpServer http, ExecutorService pool, LedgerStore store) {
+    }
+
     private final Config config;
-    private final LedgerStore store;
-    private final HttpServer http;
-    private final ExecutorService pool;
+    private final int port;
+    /** Test infrastructure, not server state: kept across a crash-restart (FR-029, research R5). */
     private final FaultInjector faults = new FaultInjector();
+    private final Object lifecycle = new Object();
+    private final AtomicBoolean restarting = new AtomicBoolean();
+    private final AtomicInteger restarts = new AtomicInteger();
+    private volatile Running running;
+    private volatile boolean closed;
 
     private BankingServer(Config config) throws IOException {
         this.config = config;
-        this.store = new LedgerStore(config.database(), config.busyTimeoutMs());
+        this.running = startRunning(config.port());
+        this.port = running.http().getAddress().getPort();
+    }
+
+    private Running startRunning(int listenPort) throws IOException {
+        LedgerStore store = new LedgerStore(config.database(), config.busyTimeoutMs());
         store.initSchema();
-        this.http = bind(new InetSocketAddress(config.host(), config.port()));
-        this.pool = Executors.newFixedThreadPool(config.threads(), threadFactory());
+        HttpServer http = bind(new InetSocketAddress(config.host(), listenPort));
+        ExecutorService pool = Executors.newFixedThreadPool(config.threads(), threadFactory());
         http.setExecutor(pool);
         HttpHandler query = new AccountQueryHandler(store);
-        // FS-2 crash-restart is added in T042; until then a crash only drops the request.
-        HttpHandler operations = new OperationHandler(config.deciders().apply(store), faults, downtime -> { });
+        HttpHandler operations = new OperationHandler(config.deciders().apply(store), faults, this::crashAndRestart);
         http.createContext("/", exchange -> HttpIo.sendMessage(exchange, 404,
                 "no such endpoint: " + exchange.getRequestMethod() + " " + exchange.getRequestURI().getPath()));
         http.createContext("/accounts/", guarded(exchange -> {
@@ -109,6 +128,71 @@ public final class BankingServer implements AutoCloseable {
         }));
         http.createContext("/admin/", guarded(new AdminHandler(store, faults)));
         http.start();
+        return new Running(http, pool, store);
+    }
+
+    /**
+     * FS-2 (FR-028, research R5): stops listening at once, discards every in-memory server object, waits
+     * {@code downtime}, and starts a new listener with new objects on the same database file and port.
+     * Everything the server knows about money afterwards comes from the database, as after a real crash.
+     *
+     * <p>Runs on its own thread, never on a worker of the listener it stops, and is single-flight: a
+     * second crash requested during a restart only drops its own request. Requests already inside a
+     * transaction either commit (then their client sees FS-3) or are rolled back by SQLite; both are safe.
+     */
+    public void crashAndRestart(Duration downtime) {
+        if (!restarting.compareAndSet(false, true)) {
+            return;
+        }
+        Thread restart = new Thread(() -> {
+            try {
+                Running old;
+                synchronized (lifecycle) {
+                    if (closed) {
+                        return;
+                    }
+                    old = running;
+                }
+                LOG.info("FS-2 crash: server stopped, restarting in " + downtime.toMillis() + " ms");
+                stopRunning(old);
+                Thread.sleep(downtime.toMillis());
+                synchronized (lifecycle) {
+                    if (closed) {
+                        return;
+                    }
+                    running = startRunning(port);
+                    restarts.incrementAndGet();
+                }
+                LOG.info("FS-2 crash: server restarted on port " + port);
+            } catch (IOException e) {
+                LOG.log(Level.SEVERE, "FS-2 crash: restart failed", e);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                restarting.set(false);
+            }
+        }, "banking-crash-restart");
+        restart.setDaemon(true);
+        restart.start();
+    }
+
+    /** Number of completed FS-2 crash-restarts. */
+    public int restarts() {
+        return restarts.get();
+    }
+
+    private static void stopRunning(Running r) {
+        try {
+            r.http().stop(0);
+        } catch (IllegalStateException alreadyStopped) {
+            // stopped by an earlier crash; nothing to do
+        }
+        r.pool().shutdownNow();
+        try {
+            r.pool().awaitTermination(2, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /**
@@ -161,8 +245,9 @@ public final class BankingServer implements AutoCloseable {
         };
     }
 
+    /** The listening port; the same before and after a crash-restart. */
     public int port() {
-        return http.getAddress().getPort();
+        return port;
     }
 
     public int threads() {
@@ -178,18 +263,16 @@ public final class BankingServer implements AutoCloseable {
         return faults;
     }
 
+    /** The store of the current run (a new object after each crash-restart, on the same file). */
     public LedgerStore store() {
-        return store;
+        return running.store();
     }
 
-    /** Stops listening immediately and stops the worker threads. */
+    /** Stops listening immediately and stops the worker threads; no restart happens afterwards. */
     public void stop() {
-        http.stop(0);
-        pool.shutdownNow();
-        try {
-            pool.awaitTermination(2, TimeUnit.SECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+        synchronized (lifecycle) {
+            closed = true;
+            stopRunning(running);
         }
     }
 

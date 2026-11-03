@@ -162,10 +162,17 @@ public final class OperationHandler implements HttpHandler {
         return new Answer(accountId, request.sequenceKey(), Outcome.UNAVAILABLE, false, null, null, message);
     }
 
+    /**
+     * Sends the answer and always writes the log line, even when sending fails because the client has
+     * already given up (FS-4): every request gets exactly one line (NFR-004).
+     */
     private static void respond(HttpExchange exchange, int status, Answer answer, DebitRequest request,
             FaultRule fault, long started) throws IOException {
-        HttpIo.sendJson(exchange, status, Json.write(answer));
-        log(answer, request, fault, started);
+        try {
+            HttpIo.sendJson(exchange, status, Json.write(answer));
+        } finally {
+            log(answer, request, fault, started);
+        }
     }
 
     private static void log(Answer answer, DebitRequest request, FaultRule fault, long started) {
