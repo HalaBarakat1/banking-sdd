@@ -29,7 +29,6 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.logging.Handler;
 import java.util.logging.LogRecord;
-import java.util.logging.Logger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -79,7 +78,7 @@ class ClientRecoveryIT {
 
     @BeforeEach
     void start() {
-        Logger.getLogger(RequestLog.LOGGER_NAME).addHandler(capture);
+        RequestLog.logger().addHandler(capture);
         server = TestServer.start(dir);
         server.store().seedAccount("A", 1000);
         server.store().seedAccount("B", 1000);
@@ -97,7 +96,7 @@ class ClientRecoveryIT {
             Invariants.crossCheck(ClientViews.from(new ClientJournal(journalFile)), records);
         } finally {
             server.close();
-            Logger.getLogger(RequestLog.LOGGER_NAME).removeHandler(capture);
+            RequestLog.logger().removeHandler(capture);
         }
     }
 

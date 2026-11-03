@@ -31,7 +31,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 import java.util.logging.Handler;
 import java.util.logging.LogRecord;
-import java.util.logging.Logger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -78,7 +77,7 @@ class CancelIT {
 
     @BeforeEach
     void start() {
-        Logger.getLogger(RequestLog.LOGGER_NAME).addHandler(capture);
+        RequestLog.logger().addHandler(capture);
         server = TestServer.start(dir);
         server.store().seedAccount("A", 1000);
         journalFile = dir.resolve("client.db");
@@ -91,7 +90,7 @@ class CancelIT {
             Invariants.crossCheck(ClientViews.from(new ClientJournal(journalFile)), server.store().readRecords("A"));
         } finally {
             server.close();
-            Logger.getLogger(RequestLog.LOGGER_NAME).removeHandler(capture);
+            RequestLog.logger().removeHandler(capture);
         }
     }
 

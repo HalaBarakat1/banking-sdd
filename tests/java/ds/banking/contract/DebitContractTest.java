@@ -235,7 +235,7 @@ class DebitContractTest {
             public void close() {
             }
         };
-        Logger logger = Logger.getLogger(RequestLog.LOGGER_NAME);
+        Logger logger = RequestLog.logger();
         logger.addHandler(capture);
         try {
             debit("A", 1, 100, false);

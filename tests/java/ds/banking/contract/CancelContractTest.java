@@ -189,7 +189,7 @@ class CancelContractTest {
             public void close() {
             }
         };
-        Logger logger = Logger.getLogger(RequestLog.LOGGER_NAME);
+        Logger logger = RequestLog.logger();
         logger.addHandler(capture);
         try {
             cancel("A", 8, false);

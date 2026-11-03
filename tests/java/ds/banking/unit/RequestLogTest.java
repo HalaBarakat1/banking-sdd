@@ -81,7 +81,7 @@ class RequestLogTest {
             public void close() {
             }
         };
-        Logger logger = Logger.getLogger(RequestLog.LOGGER_NAME);
+        Logger logger = RequestLog.logger();
         logger.addHandler(capture);
         try {
             RequestLog.Entry entry = new RequestLog.Entry(Operation.DEBIT, "A", 1L, false,

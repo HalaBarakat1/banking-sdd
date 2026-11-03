@@ -40,6 +40,11 @@ public final class ClientLog {
     private ClientLog() {
     }
 
+    /** The attempt logger; tests attach handlers here (see {@code RequestLog.logger()} for why). */
+    public static Logger logger() {
+        return LOGGER;
+    }
+
     /** Logs one attempt; {@code attempt} counts within the current send run. */
     static void attempt(Operation operation, String accountId, long key, int attempt, boolean isRetry,
             AttemptResult result) {

@@ -202,7 +202,7 @@ class PaymentClientTest {
             public void close() {
             }
         };
-        Logger logger = Logger.getLogger(ClientLog.LOGGER_NAME);
+        Logger logger = ClientLog.logger();
         logger.addHandler(capture);
         try (StubBankServer stub = StubBankServer.start(UNAVAILABLE, Reply.json(200, EXECUTED))) {
             client(stub, journal()).debit("A", 100);

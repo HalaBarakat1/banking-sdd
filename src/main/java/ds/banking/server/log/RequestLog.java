@@ -65,6 +65,16 @@ public final class RequestLog {
                 + " latency_ms=" + e.latencyMs();
     }
 
+    /**
+     * The request logger. Tests attach handlers through this method rather than
+     * {@code Logger.getLogger(LOGGER_NAME)}: the constant is inlined, so that call does not load this
+     * class, and {@code LogManager} holds loggers only weakly; the logger could be collected and replaced
+     * by a new one without the test's handler.
+     */
+    public static Logger logger() {
+        return LOGGER;
+    }
+
     /** Writes one INFO line for the entry. */
     public static void log(Entry entry) {
         LOGGER.info(format(entry));
