@@ -77,8 +77,8 @@ retry); US2–US5 build on it (see Dependencies).
 - [x] T015 [P] `src/main/java/ds/banking/server/log/RequestLog.java` with a one-line `java.util.logging` formatter — passes T009 [NFR-004]
 - [x] T016 [P] `tests/java/ds/banking/support/Invariants.java` and `support/ExpectedDebit.java` — passes T010 [Money Invariant, SC-001]
 - [x] T017 `src/main/java/ds/banking/server/BankingServer.java` (start, stop, fixed pool, port rebind for up to 2 s every 50 ms) and `tests/java/ds/banking/support/TestServer.java` (temp `bank.db`, random free port) — passes T011 [NFR-002, research R1, R11]
-- [ ] T018 `tests/java/ds/banking/contract/InspectionContractTest.java` (test, write first): `POST /admin/accounts` returns 201 / 200 / 409 / 400 as specified; `GET /accounts/{id}` and `GET /accounts/{id}/transactions` bodies; unknown account → 404 `UNKNOWN_ACCOUNT` [FR-031]
-- [ ] T019 `src/main/java/ds/banking/server/http/AccountQueryHandler.java` and `server/http/AdminHandler.java` (seeding only) — passes T018 [FR-031]
+- [x] T018 `tests/java/ds/banking/contract/InspectionContractTest.java` (test, write first): `POST /admin/accounts` returns 201 / 200 / 409 / 400 as specified; `GET /accounts/{id}` and `GET /accounts/{id}/transactions` bodies; unknown account → 404 `UNKNOWN_ACCOUNT` [FR-031]
+- [x] T019 `src/main/java/ds/banking/server/http/AccountQueryHandler.java` and `server/http/AdminHandler.java` (seeding only) — passes T018 [FR-031]
 
 **Checkpoint**: Server starts, accounts can be seeded and inspected; tests can start servers on temp
 databases and check invariants.

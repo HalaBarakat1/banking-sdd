@@ -1,6 +1,9 @@
 package ds.banking.server;
 
+import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
+import ds.banking.server.http.AccountQueryHandler;
+import ds.banking.server.http.AdminHandler;
 import ds.banking.server.http.HttpIo;
 import ds.banking.server.store.LedgerStore;
 import java.io.IOException;
@@ -13,6 +16,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * The Banking Service process: an HTTP listener in front of the ledger store.
@@ -30,6 +35,7 @@ public final class BankingServer implements AutoCloseable {
     public static final int DEFAULT_PORT = 8080;
     public static final String DEFAULT_HOST = "127.0.0.1";
 
+    private static final Logger LOG = Logger.getLogger(BankingServer.class.getName());
     private static final Duration REBIND_WINDOW = Duration.ofSeconds(2);
     private static final long REBIND_PAUSE_MS = 50;
 
@@ -74,9 +80,35 @@ public final class BankingServer implements AutoCloseable {
         this.http = bind(new InetSocketAddress(config.host(), config.port()));
         this.pool = Executors.newFixedThreadPool(config.threads(), threadFactory());
         http.setExecutor(pool);
+        HttpHandler query = new AccountQueryHandler(store);
         http.createContext("/", exchange -> HttpIo.sendMessage(exchange, 404,
                 "no such endpoint: " + exchange.getRequestMethod() + " " + exchange.getRequestURI().getPath()));
+        http.createContext("/accounts/", guarded(exchange -> {
+            if (exchange.getRequestMethod().equals("GET")) {
+                query.handle(exchange);
+            } else {
+                HttpIo.sendMessage(exchange, 405, "method not allowed: " + exchange.getRequestMethod());
+            }
+        }));
+        http.createContext("/admin/", guarded(new AdminHandler(store)));
         http.start();
+    }
+
+    /**
+     * Wraps a handler so that an unexpected exception still produces a JSON answer: {@code 500} with
+     * {@code outcome = UNAVAILABLE}, which the client retries (FR-004, constitution Principle IV).
+     */
+    private static HttpHandler guarded(HttpHandler handler) {
+        return exchange -> {
+            try {
+                handler.handle(exchange);
+            } catch (RuntimeException e) {
+                LOG.log(Level.WARNING, "unexpected error in " + exchange.getRequestURI(), e);
+                HttpIo.sendOutcome(exchange, 500, "UNAVAILABLE", "unexpected server error");
+            } finally {
+                exchange.close();
+            }
+        };
     }
 
     /** Creates the schema if needed and starts listening. */
