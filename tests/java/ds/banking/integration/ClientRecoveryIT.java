@@ -198,6 +198,36 @@ class ClientRecoveryIT {
     }
 
     @Test
+    @DisplayName("FR-025 / FR-026 / SC-001: a recovery in another thread that picks up a fresh debit's key does not make "
+            + "that debit report REFUSED; it waits and reports the key's real outcome, so a caller never pays twice")
+    void recoveryRacingAFreshDebit() throws Exception {
+        put("{\"rules\":[{\"scenario\":\"DELAY_BEFORE_EXECUTE\",\"trigger\":\"NEXT_N\",\"count\":1,\"delay_ms\":300}]}");
+        ClientJournal journal = new ClientJournal(journalFile);
+        PaymentClient[] holder = new PaymentClient[1];
+        java.util.concurrent.atomic.AtomicReference<java.util.concurrent.Future<List<TransactionResult>>> racing =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        ClientHooks startRecoveryAfterReserve = (point, entry) -> {
+            if (point != ClientHooks.Point.AFTER_RESERVE) {
+                return;
+            }
+            racing.set(java.util.concurrent.CompletableFuture.supplyAsync(() -> holder[0].recoverPending()));
+            long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+            while (journal.find(entry.sequenceKey()).orElseThrow().attempts() == 0 && System.nanoTime() < deadline) {
+                Thread.onSpinWait();
+            }
+        };
+        holder[0] = new PaymentClient(journal, new BankingHttpClient(server.uri("/"), POLICY), POLICY,
+                Backoff.withRandomJitter(POLICY), Sleeper.system(), Clock.system(), startRecoveryAfterReserve);
+
+        TransactionResult debit = holder[0].debit("A", 100);
+
+        racing.get().get(10, java.util.concurrent.TimeUnit.SECONDS);
+        assertEquals(Result.SUCCEEDED, debit.result(), debit.toString());
+        assertEquals(1, journal.entries().size());
+        assertEquals(900, server.store().readAccount("A").orElseThrow().balance());
+    }
+
+    @Test
     @DisplayName("FR-026: with nothing unresolved, recovery sends nothing")
     void nothingToRecover() {
         client(null).debit("A", 100);
