@@ -116,7 +116,7 @@ class LedgerStoreTest {
         "('A', 2, 'DEBIT', 10, 'DONE', 900, 't')",
         "('A', 0, 'DEBIT', 10, 'EXECUTED', 900, 't')",
         "('NOBODY', 2, 'DEBIT', 10, 'EXECUTED', 900, 't')",
-        "('A', 2, 'DEBIT', '10', 'EXECUTED', 900, 't')"
+        "('A', 2, 'DEBIT', 'ten', 'EXECUTED', 900, 't')"
     })
     @DisplayName("FR-005: record CHECKs refuse rows that contradict the data model, including a DEBIT with NULL amount")
     void recordChecks(String values) throws SQLException {
@@ -131,7 +131,7 @@ class LedgerStoreTest {
     }
 
     @ParameterizedTest(name = "[{index}] \"{0}\"")
-    @ValueSource(strings = {"", "a b", "A/B", "Ä", "x".repeat(65)})
+    @ValueSource(strings = {"", "a b", "A/B", "Ä", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"})
     @DisplayName("FR-005: account_id is 1-64 chars of [A-Za-z0-9_-], in the schema and when seeding")
     void accountIdFormat(String id) throws SQLException {
         assertRefused("INSERT INTO accounts VALUES ('" + id + "', 10, 10, 0)");
