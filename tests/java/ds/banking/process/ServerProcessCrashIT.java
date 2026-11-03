@@ -75,8 +75,8 @@ class ServerProcessCrashIT {
         manifest.getMainAttributes().put(Attributes.Name.MAIN_CLASS, "ds.banking.Main");
         manifest.getMainAttributes().put(Attributes.Name.CLASS_PATH, String.join(" ", urls));
         Path jar = dir.resolve("launcher.jar");
-        try (OutputStream out = Files.newOutputStream(jar); JarOutputStream ignored = new JarOutputStream(out, manifest)) {
-            // the manifest is all we need
+        try (OutputStream out = Files.newOutputStream(jar)) {
+            new JarOutputStream(out, manifest).close(); // the manifest is all we need
         }
         return jar;
     }
