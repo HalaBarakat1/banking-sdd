@@ -1,0 +1,126 @@
+Manual quickstart run (T058) - 2026-11-04, Windows 11, Java 21, built from commit 687d853
+Server: java -jar target/banking-sdd.jar server --port 8080 --db data/bank.db --seed A=1000
+Five debits of 100 from A, each under one fault scenario, then a cancel of a debit stuck at the server.
+
+################ CLIENT SIDE ################
+
+=== FS-3 DROP_RESPONSE (quickstart section 2) ===
+$ curl -X PUT http://127.0.0.1:8080/admin/faults -d '{"rules":[{"scenario":"DROP_RESPONSE","trigger":"NEXT_N","count":1}]}'
+{"rules":[{"scenario":"DROP_RESPONSE","trigger":"NEXT_N","count":1}]}
+
+$ java -jar target/banking-sdd.jar client --db data/client.db debit A 100
+2026-11-03T21:35:22.668Z INFO op=DEBIT account=A key=1 attempt=1 is_retry=false result=retryable reason=no response: java.io.IOException: HTTP/1.1 header parser received no bytes
+2026-11-03T21:35:22.800Z INFO op=DEBIT account=A key=1 attempt=2 is_retry=true result=final status=200 outcome=EXECUTED duplicate=true
+SUCCEEDED: debit executed
+{"result":"SUCCEEDED","account_id":"A","sequence_key":1,"outcome":"EXECUTED","duplicate":true,"balance_after":900,"attempts":2}
+(exit 0)
+
+$ curl -s http://127.0.0.1:8080/accounts/A
+{"account_id":"A","initial_balance":1000,"balance":900,"last_sequence_key":1}(exit 0)
+
+=== FS-1 DROP_REQUEST ===
+$ curl -X PUT http://127.0.0.1:8080/admin/faults -d '{"rules":[{"scenario":"DROP_REQUEST","trigger":"NEXT_N","count":1}]}'
+{"rules":[{"scenario":"DROP_REQUEST","trigger":"NEXT_N","count":1}]}
+
+$ java -jar target/banking-sdd.jar client --db data/client.db debit A 100
+2026-11-03T21:35:24.137Z INFO op=DEBIT account=A key=2 attempt=1 is_retry=false result=retryable reason=no response: java.io.IOException: HTTP/1.1 header parser received no bytes
+2026-11-03T21:35:24.278Z INFO op=DEBIT account=A key=2 attempt=2 is_retry=true result=final status=200 outcome=EXECUTED duplicate=false
+SUCCEEDED: debit executed
+{"result":"SUCCEEDED","account_id":"A","sequence_key":2,"outcome":"EXECUTED","duplicate":false,"balance_after":800,"attempts":2}
+(exit 0)
+
+=== FS-2 CRASH_BEFORE_EXECUTE ===
+$ curl -X PUT http://127.0.0.1:8080/admin/faults -d '{"rules":[{"scenario":"CRASH_BEFORE_EXECUTE","trigger":"NEXT_N","count":1}]}'
+{"rules":[{"scenario":"CRASH_BEFORE_EXECUTE","trigger":"NEXT_N","count":1,"downtime_ms":1000}]}
+
+$ java -jar target/banking-sdd.jar client --db data/client.db debit A 100
+2026-11-03T21:35:25.572Z INFO op=DEBIT account=A key=3 attempt=1 is_retry=false result=retryable reason=no response: java.io.IOException: HTTP/1.1 header parser received no bytes
+2026-11-03T21:35:25.689Z INFO op=DEBIT account=A key=3 attempt=2 is_retry=true result=retryable reason=no response: java.net.ConnectException
+2026-11-03T21:35:25.887Z INFO op=DEBIT account=A key=3 attempt=3 is_retry=true result=retryable reason=no response: java.net.ConnectException
+2026-11-03T21:35:26.298Z INFO op=DEBIT account=A key=3 attempt=4 is_retry=true result=retryable reason=no response: java.net.ConnectException
+2026-11-03T21:35:27.180Z INFO op=DEBIT account=A key=3 attempt=5 is_retry=true result=final status=200 outcome=EXECUTED duplicate=false
+SUCCEEDED: debit executed
+{"result":"SUCCEEDED","account_id":"A","sequence_key":3,"outcome":"EXECUTED","duplicate":false,"balance_after":700,"attempts":5}
+(exit 0)
+
+=== FS-4a DELAY_BEFORE_EXECUTE 3000 ms ===
+$ curl -X PUT http://127.0.0.1:8080/admin/faults -d '{"rules":[{"scenario":"DELAY_BEFORE_EXECUTE","trigger":"NEXT_N","count":1,"delay_ms":3000}]}'
+{"rules":[{"scenario":"DELAY_BEFORE_EXECUTE","trigger":"NEXT_N","count":1,"delay_ms":3000}]}
+
+$ java -jar target/banking-sdd.jar client --db data/client.db debit A 100
+2026-11-03T21:35:30.447Z INFO op=DEBIT account=A key=4 attempt=1 is_retry=false result=retryable reason=timed out: request timed out
+2026-11-03T21:35:30.624Z INFO op=DEBIT account=A key=4 attempt=2 is_retry=true result=final status=200 outcome=EXECUTED duplicate=false
+SUCCEEDED: debit executed
+{"result":"SUCCEEDED","account_id":"A","sequence_key":4,"outcome":"EXECUTED","duplicate":false,"balance_after":600,"attempts":2}
+(exit 0)
+
+=== FS-4b DELAY_AFTER_EXECUTE 3000 ms ===
+$ curl -X PUT http://127.0.0.1:8080/admin/faults -d '{"rules":[{"scenario":"DELAY_AFTER_EXECUTE","trigger":"NEXT_N","count":1,"delay_ms":3000}]}'
+{"rules":[{"scenario":"DELAY_AFTER_EXECUTE","trigger":"NEXT_N","count":1,"delay_ms":3000}]}
+
+$ java -jar target/banking-sdd.jar client --db data/client.db debit A 100
+2026-11-03T21:35:33.894Z INFO op=DEBIT account=A key=5 attempt=1 is_retry=false result=retryable reason=timed out: request timed out
+2026-11-03T21:35:34.098Z INFO op=DEBIT account=A key=5 attempt=2 is_retry=true result=final status=200 outcome=EXECUTED duplicate=true
+SUCCEEDED: debit executed
+{"result":"SUCCEEDED","account_id":"A","sequence_key":5,"outcome":"EXECUTED","duplicate":true,"balance_after":500,"attempts":2}
+(exit 0)
+
+=== state after five debits of 100 under five faults ===
+$ curl -s -X DELETE http://127.0.0.1:8080/admin/faults
+{"rules":[]}(exit 0)
+
+$ curl -s http://127.0.0.1:8080/accounts/A
+{"account_id":"A","initial_balance":1000,"balance":500,"last_sequence_key":5}(exit 0)
+
+=== Cancel (US5): debit stuck at the server until the client gives up, then cancel ===
+$ curl -X PUT http://127.0.0.1:8080/admin/faults -d '{"rules":[{"scenario":"DELAY_BEFORE_EXECUTE","trigger":"NEXT_N","count":2,"operation":"DEBIT","delay_ms":4000}]}'
+{"rules":[{"scenario":"DELAY_BEFORE_EXECUTE","trigger":"NEXT_N","count":2,"operation":"DEBIT","delay_ms":4000}]}
+
+$ java -jar target/banking-sdd.jar client --db data/client.db --attempts 2 --timeout-ms 500 --backoff-ms 50 debit A 100
+2026-11-03T21:35:39.515Z INFO op=DEBIT account=A key=6 attempt=1 is_retry=false result=retryable reason=timed out: request timed out
+2026-11-03T21:35:40.094Z INFO op=DEBIT account=A key=6 attempt=2 is_retry=true result=retryable reason=timed out: request timed out
+2026-11-03T21:35:40.109Z INFO op=DEBIT account=A key=6 result=unknown attempts=2
+UNKNOWN: no final answer after 2 attempts; the key is kept for a later resend
+{"result":"UNKNOWN","account_id":"A","sequence_key":6,"attempts":2}
+(exit 3)
+
+$ java -jar target/banking-sdd.jar client --db data/client.db cancel A 6
+2026-11-03T21:35:41.444Z INFO op=CANCEL account=A key=6 attempt=1 is_retry=false result=final status=200 outcome=CANCELLED duplicate=false
+CANCELLED: key cancelled
+{"result":"CANCELLED","account_id":"A","sequence_key":6,"outcome":"CANCELLED","duplicate":false,"attempts":1}
+(exit 0)
+
+$ curl -s http://127.0.0.1:8080/accounts/A
+{"account_id":"A","initial_balance":1000,"balance":500,"last_sequence_key":6}(exit 0)
+
+$ java -jar target/banking-sdd.jar client --db data/client.db journal A
+{"sequence_key":1,"account_id":"A","operation":"DEBIT","amount":100,"state":"RESOLVED","outcome":"EXECUTED","balance_after":900,"attempts":2,"created_at":"2026-11-03T21:35:22.435621500Z","updated_at":"2026-11-03T21:35:22.803195800Z"}
+{"sequence_key":2,"account_id":"A","operation":"DEBIT","amount":100,"state":"RESOLVED","outcome":"EXECUTED","balance_after":800,"attempts":2,"created_at":"2026-11-03T21:35:23.937076600Z","updated_at":"2026-11-03T21:35:24.278329200Z"}
+{"sequence_key":3,"account_id":"A","operation":"DEBIT","amount":100,"state":"RESOLVED","outcome":"EXECUTED","balance_after":700,"attempts":5,"created_at":"2026-11-03T21:35:25.364572600Z","updated_at":"2026-11-03T21:35:27.180154800Z"}
+{"sequence_key":4,"account_id":"A","operation":"DEBIT","amount":100,"state":"RESOLVED","outcome":"EXECUTED","balance_after":600,"attempts":2,"created_at":"2026-11-03T21:35:28.259477700Z","updated_at":"2026-11-03T21:35:30.624557200Z"}
+{"sequence_key":5,"account_id":"A","operation":"DEBIT","amount":100,"state":"RESOLVED","outcome":"EXECUTED","balance_after":500,"attempts":2,"created_at":"2026-11-03T21:35:31.721310400Z","updated_at":"2026-11-03T21:35:34.098120700Z"}
+{"sequence_key":6,"account_id":"A","operation":"CANCEL","amount":100,"state":"RESOLVED","outcome":"CANCELLED","attempts":1,"created_at":"2026-11-03T21:35:38.843897300Z","updated_at":"2026-11-03T21:35:41.452545600Z"}
+(exit 0)
+
+################ SERVER REQUEST LOG ################
+
+seed A=1000: CREATED
+Banking Service listening on http://127.0.0.1:8080 (database D:\Hala\Fifth Year\????\Distributed Systems\3\banking-sdd\data\bank.db)
+2026-11-03T21:35:22.647Z INFO op=DEBIT account=A key=1 is_retry=false decision=EXECUTED outcome=EXECUTED fault=DROP_RESPONSE latency_ms=19
+2026-11-03T21:35:22.737Z INFO op=DEBIT account=A key=1 is_retry=true decision=DUPLICATE outcome=EXECUTED fault=none latency_ms=4
+2026-11-03T21:35:24.115Z INFO op=DEBIT account=A key=2 is_retry=false decision=DROPPED outcome=- fault=DROP_REQUEST latency_ms=1
+2026-11-03T21:35:24.214Z INFO op=DEBIT account=A key=2 is_retry=true decision=EXECUTED outcome=EXECUTED fault=none latency_ms=7
+2026-11-03T21:35:25.552Z INFO op=DEBIT account=A key=3 is_retry=false decision=DROPPED outcome=- fault=CRASH_BEFORE_EXECUTE latency_ms=1
+Nov 04, 2026 12:35:25 AM ds.banking.server.BankingServer lambda$crashAndRestart$2
+INFO: FS-2 crash: server stopped, restarting in 1000 ms
+Nov 04, 2026 12:35:26 AM ds.banking.server.BankingServer lambda$crashAndRestart$2
+INFO: FS-2 crash: server restarted on port 8080
+2026-11-03T21:35:27.121Z INFO op=DEBIT account=A key=3 is_retry=true decision=EXECUTED outcome=EXECUTED fault=none latency_ms=6
+2026-11-03T21:35:30.548Z INFO op=DEBIT account=A key=4 is_retry=true decision=EXECUTED outcome=EXECUTED fault=none latency_ms=11
+2026-11-03T21:35:31.451Z INFO op=DEBIT account=A key=4 is_retry=false decision=DUPLICATE outcome=EXECUTED fault=DELAY_BEFORE_EXECUTE latency_ms=3007
+2026-11-03T21:35:34.031Z INFO op=DEBIT account=A key=5 is_retry=true decision=DUPLICATE outcome=EXECUTED fault=none latency_ms=9
+2026-11-03T21:35:34.918Z INFO op=DEBIT account=A key=5 is_retry=false decision=EXECUTED outcome=EXECUTED fault=DELAY_AFTER_EXECUTE latency_ms=3012
+2026-11-03T21:35:41.367Z INFO op=CANCEL account=A key=6 is_retry=false decision=EXECUTED outcome=CANCELLED fault=none latency_ms=11
+2026-11-03T21:35:43.027Z INFO op=DEBIT account=A key=6 is_retry=false decision=DUPLICATE outcome=CANCELLED fault=DELAY_BEFORE_EXECUTE latency_ms=4009
+2026-11-03T21:35:43.602Z INFO op=DEBIT account=A key=6 is_retry=true decision=DUPLICATE outcome=CANCELLED fault=DELAY_BEFORE_EXECUTE latency_ms=4010
+[killed]

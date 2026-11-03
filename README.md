@@ -130,6 +130,24 @@ curl http://127.0.0.1:8080/accounts/A
 curl -X DELETE http://127.0.0.1:8080/admin/faults
 ```
 
+### Observed run (T058)
+
+Running the quickstart by hand on a clean `data/` folder, with five debits of 100 from account A, each
+under a different fault, and then a cancel. The full transcript is in
+[docs/quickstart-run.txt](docs/quickstart-run.txt).
+
+| Fault | Client attempts | Server log for the key | Result |
+|---|---|---|---|
+| FS-3 `DROP_RESPONSE` | 1: no response; 2: `EXECUTED duplicate=true` | `EXECUTED fault=DROP_RESPONSE`, then `DUPLICATE is_retry=true` | `SUCCEEDED`, balance 900 |
+| FS-1 `DROP_REQUEST` | 1: no response; 2: `EXECUTED` | `DROPPED fault=DROP_REQUEST`, then `EXECUTED is_retry=true` | `SUCCEEDED`, balance 800 |
+| FS-2 `CRASH_BEFORE_EXECUTE` | 1: no response; 2–4: connection refused (server down 1 s); 5: `EXECUTED` | `DROPPED fault=CRASH_BEFORE_EXECUTE`, then `EXECUTED is_retry=true` | `SUCCEEDED`, balance 700 |
+| FS-4a `DELAY_BEFORE_EXECUTE` 3 s | 1: timed out after 2 s; 2: `EXECUTED` | `EXECUTED is_retry=true`; the delayed first copy finishes 3 s later as `DUPLICATE` | `SUCCEEDED`, balance 600 |
+| FS-4b `DELAY_AFTER_EXECUTE` 3 s | 1: timed out; 2: `EXECUTED duplicate=true` | `DUPLICATE is_retry=true`; the first copy's `EXECUTED` is logged after its delay | `SUCCEEDED`, balance 500 |
+| Cancel: debit delayed 4 s, client gives up (`--attempts 2 --timeout-ms 500`) | debit: `UNKNOWN` (exit 3); `cancel A 6`: `CANCELLED` (exit 0) | `CANCEL ... EXECUTED outcome=CANCELLED`; both delayed debit copies later `DUPLICATE outcome=CANCELLED` | balance stays **500** |
+
+Final state: `{"balance":500,"last_sequence_key":6}`, which is five debits of 100, each exactly once,
+and one burnt key.
+
 ## Evidence
 
 | Requirement | Proven by |
