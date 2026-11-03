@@ -123,7 +123,7 @@ class CliTest {
     @ParameterizedTest(name = "[{index}] client {0}")
     @ValueSource(strings = {"", "fly", "debit", "debit A", "debit A x", "debit A 0", "debit a%b 10",
         "--attempts 0 debit A 10", "--timeout-ms -5 debit A 10", "--backoff-ms 50 --max-backoff-ms 10 debit A 10",
-        "--url ::: debit A 10", "--bogus 1 debit A 10"})
+        "--url ::: debit A 10", "--bogus 1 debit A 10", "recover A"})
     @DisplayName("contracts/client-cli.md: invalid client arguments exit with code 2")
     void invalidClientArguments(String args) {
         String[] parts = args.isEmpty() ? new String[] {"client"} : ("client " + args).split(" ");
@@ -141,23 +141,98 @@ class CliTest {
         assertEquals(3, ClientMain.exitCodeFor(List.of(Result.SUCCEEDED, Result.UNKNOWN, Result.REFUSED)));
     }
 
+    /** Client arguments with fast retries, so tests against a closed port finish quickly. */
+    private static String[] fast(String url, String db, String... command) {
+        List<String> args = new java.util.ArrayList<>(List.of("client", "--url", url, "--db", db, "--attempts", "2",
+                "--backoff-ms", "1", "--max-backoff-ms", "2"));
+        args.addAll(List.of(command));
+        return args.toArray(String[]::new);
+    }
+
     @Test
-    @DisplayName("FR-024 / FR-025: no server -> UNKNOWN (exit 3); a second debit on that account is REFUSED (exit 4)")
+    @DisplayName("FR-024 / FR-025 / FR-026: no server -> UNKNOWN (exit 3); the next debit first resends it (still UNKNOWN), "
+            + "then is REFUSED; exit 3 wins over 4")
     void unknownThenRefused() throws Exception {
         String url = "http://127.0.0.1:" + closedPort();
         String db = dir.resolve("client.db").toString();
 
-        int first = main("client", "--url", url, "--db", db, "--attempts", "2", "--backoff-ms", "1",
-                "--max-backoff-ms", "2", "debit", "A", "10");
+        int first = main(fast(url, db, "debit", "A", "10"));
         JsonNode firstResult = lastJson();
-        int second = main("client", "--url", url, "--db", db, "debit", "A", "5");
-        JsonNode secondResult = lastJson();
+        int second = main(fast(url, db, "debit", "A", "5"));
+        List<String> secondLines = outLines();
 
         assertEquals(3, first);
         assertEquals("UNKNOWN", firstResult.get("result").asText());
         assertEquals(1, firstResult.get("sequence_key").asLong());
-        assertEquals(4, second);
-        assertEquals("REFUSED", secondResult.get("result").asText());
+        assertEquals(3, second);
+        assertEquals(2, secondLines.size(), secondLines.toString());
+        JsonNode recovered = Json.mapper().readTree(secondLines.get(0));
+        assertEquals("UNKNOWN", recovered.get("result").asText());
+        assertEquals(1, recovered.get("sequence_key").asLong());
+        assertEquals("REFUSED", lastJson().get("result").asText());
+    }
+
+    @Test
+    @DisplayName("FR-026: recover with nothing unresolved prints nothing and exits 0")
+    void recoverNothing() {
+        assertEquals(0, main("client", "--url", "http://127.0.0.1:1", "--db", dir.resolve("client.db").toString(),
+                "recover"));
+        assertTrue(outLines().isEmpty(), outLines().toString());
+    }
+
+    @Test
+    @DisplayName("FR-026 / FR-024: recover with the server still down keeps the entry UNKNOWN and exits 3")
+    void recoverWhileServerDown() throws Exception {
+        String url = "http://127.0.0.1:" + closedPort();
+        String db = dir.resolve("client.db").toString();
+        main(fast(url, db, "debit", "A", "10"));
+
+        int code = main(fast(url, db, "recover"));
+
+        assertEquals(3, code);
+        assertEquals("UNKNOWN", lastJson().get("result").asText());
+    }
+
+    @Test
+    @DisplayName("FR-026 / SC-005: recover against a running server resolves the UNKNOWN entry and exits 0")
+    void recoverAgainstServer() throws Exception {
+        String db = dir.resolve("client.db").toString();
+        main(fast("http://127.0.0.1:" + closedPort(), db, "debit", "A", "10"));
+
+        try (TestServer server = TestServer.start(dir)) {
+            server.store().seedAccount("A", 1000);
+
+            int code = main(fast("http://127.0.0.1:" + server.port(), db, "recover"));
+
+            assertEquals(0, code);
+            JsonNode result = lastJson();
+            assertEquals("SUCCEEDED", result.get("result").asText());
+            assertEquals(1, result.get("sequence_key").asLong());
+            assertEquals(990, server.store().readAccount("A").orElseThrow().balance());
+        }
+    }
+
+    @Test
+    @DisplayName("FR-026 / FR-025: debit first resends the account's UNKNOWN entry; once resolved, the new debit goes ahead")
+    void debitRecoversFirst() throws Exception {
+        String db = dir.resolve("client.db").toString();
+        main(fast("http://127.0.0.1:" + closedPort(), db, "debit", "A", "10"));
+
+        try (TestServer server = TestServer.start(dir)) {
+            server.store().seedAccount("A", 1000);
+
+            int code = main(fast("http://127.0.0.1:" + server.port(), db, "debit", "A", "5"));
+
+            assertEquals(0, code);
+            List<String> lines = outLines();
+            assertEquals(2, lines.size(), lines.toString());
+            assertEquals(1, Json.mapper().readTree(lines.get(0)).get("sequence_key").asLong());
+            assertEquals("SUCCEEDED", Json.mapper().readTree(lines.get(0)).get("result").asText());
+            JsonNode debit = lastJson();
+            assertEquals("SUCCEEDED", debit.get("result").asText());
+            assertEquals(2, debit.get("sequence_key").asLong());
+            assertEquals(985, server.store().readAccount("A").orElseThrow().balance());
+        }
     }
 
     @Test
