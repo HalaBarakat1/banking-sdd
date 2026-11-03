@@ -2,9 +2,12 @@ package ds.banking.server;
 
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
+import ds.banking.server.decision.Decider;
+import ds.banking.server.decision.DecisionService;
 import ds.banking.server.http.AccountQueryHandler;
 import ds.banking.server.http.AdminHandler;
 import ds.banking.server.http.HttpIo;
+import ds.banking.server.http.OperationHandler;
 import ds.banking.server.store.LedgerStore;
 import java.io.IOException;
 import java.net.BindException;
@@ -16,6 +19,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -47,24 +51,31 @@ public final class BankingServer implements AutoCloseable {
      * @param port          port; 0 picks a free one
      * @param threads       worker threads
      * @param busyTimeoutMs how long a request waits for the database lock before answering 503
+     * @param deciders      builds the decider on the store; the real rules unless a test replaces them
      */
-    public record Config(Path database, String host, int port, int threads, int busyTimeoutMs) {
+    public record Config(Path database, String host, int port, int threads, int busyTimeoutMs,
+            Function<LedgerStore, Decider> deciders) {
 
         public static Config defaults(Path database) {
             return new Config(database, DEFAULT_HOST, DEFAULT_PORT, DEFAULT_THREADS,
-                    LedgerStore.DEFAULT_BUSY_TIMEOUT_MS);
+                    LedgerStore.DEFAULT_BUSY_TIMEOUT_MS, DecisionService::new);
         }
 
         public Config withPort(int newPort) {
-            return new Config(database, host, newPort, threads, busyTimeoutMs);
+            return new Config(database, host, newPort, threads, busyTimeoutMs, deciders);
         }
 
         public Config withThreads(int newThreads) {
-            return new Config(database, host, port, newThreads, busyTimeoutMs);
+            return new Config(database, host, port, newThreads, busyTimeoutMs, deciders);
         }
 
         public Config withBusyTimeoutMs(int newBusyTimeoutMs) {
-            return new Config(database, host, port, threads, newBusyTimeoutMs);
+            return new Config(database, host, port, threads, newBusyTimeoutMs, deciders);
+        }
+
+        /** Test seam: replaces the decision rules (research R9, the 500 path). */
+        public Config withDecider(Function<LedgerStore, Decider> newDeciders) {
+            return new Config(database, host, port, threads, busyTimeoutMs, newDeciders);
         }
     }
 
@@ -81,11 +92,14 @@ public final class BankingServer implements AutoCloseable {
         this.pool = Executors.newFixedThreadPool(config.threads(), threadFactory());
         http.setExecutor(pool);
         HttpHandler query = new AccountQueryHandler(store);
+        HttpHandler operations = new OperationHandler(config.deciders().apply(store));
         http.createContext("/", exchange -> HttpIo.sendMessage(exchange, 404,
                 "no such endpoint: " + exchange.getRequestMethod() + " " + exchange.getRequestURI().getPath()));
         http.createContext("/accounts/", guarded(exchange -> {
             if (exchange.getRequestMethod().equals("GET")) {
                 query.handle(exchange);
+            } else if (exchange.getRequestMethod().equals("POST")) {
+                operations.handle(exchange);
             } else {
                 HttpIo.sendMessage(exchange, 405, "method not allowed: " + exchange.getRequestMethod());
             }
