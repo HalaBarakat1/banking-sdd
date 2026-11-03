@@ -78,7 +78,31 @@ public final class PaymentClient {
                     "account " + accountId + " has an unresolved transaction; resolve it first");
         }
         hooks.at(ClientHooks.Point.AFTER_RESERVE, reserved.get());
-        return sendExclusive(reserved.get().sequenceKey());
+        return sendOwned(reserved.get().sequenceKey());
+    }
+
+    /**
+     * Sends the key a {@code debit} call has just reserved. That call owns the transaction, so it must
+     * report the key's real outcome: if a recovery in another thread is already sending the key, wait for
+     * it instead of answering REFUSED (a caller retrying after REFUSED would pay twice), then report the
+     * journal's outcome, or send again if that run ended UNKNOWN.
+     */
+    private TransactionResult sendOwned(long key) {
+        while (!active.add(key)) {
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                JournalEntry entry = journal.find(key).orElseThrow();
+                return new TransactionResult(Result.UNKNOWN, entry.accountId(), key, null, null, null, 0,
+                        "interrupted while another thread was sending the key; it is kept for a later resend");
+            }
+        }
+        try {
+            return send(key);
+        } finally {
+            active.remove(key);
+        }
     }
 
     /**
