@@ -11,11 +11,14 @@ import ds.banking.client.RetryPolicy;
 import ds.banking.client.TransactionResult;
 import ds.banking.client.TransactionResult.Result;
 import ds.banking.protocol.Outcome;
+import ds.banking.server.store.RecordRow;
 import ds.banking.support.ClientViews;
 import ds.banking.support.Invariants;
 import ds.banking.support.TestServer;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -48,7 +51,9 @@ class DebitFlowIT {
     void stop() {
         Invariants.check(server.store(), "A");
         Invariants.check(server.store(), "B");
-        Invariants.crossCheck(ClientViews.from(client.journal()), server.store().readRecords("A"));
+        List<RecordRow> records = new ArrayList<>(server.store().readRecords("A"));
+        records.addAll(server.store().readRecords("B"));
+        Invariants.crossCheck(ClientViews.from(client.journal()), records);
         server.close();
     }
 
